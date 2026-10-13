@@ -45,6 +45,7 @@ export class TelegramBridge {
   private sessionStateFile: string;
   private mediaGroupBuffers = new Map<string, MediaGroupBuffer>();
   private sessionLocks = new Map<string, Promise<void>>();
+  private processedMessageIds = new Set<number>();
 
   constructor(config: AppConfig, dshClient: DshClient) {
     this.config = config;
@@ -94,6 +95,20 @@ export class TelegramBridge {
         console.warn(`[Security] Dropping message from unauthorized user: ${fromId}`);
         return;
       }
+
+      // Deduplicate re-delivered messages on service restart
+      if (ctx.message?.message_id) {
+        if (this.processedMessageIds.has(ctx.message.message_id)) {
+          console.warn(`[Deduplication] Dropping re-delivered message ID: ${ctx.message.message_id}`);
+          return;
+        }
+        this.processedMessageIds.add(ctx.message.message_id);
+        if (this.processedMessageIds.size > 2000) {
+          const first = this.processedMessageIds.values().next().value;
+          if (first !== undefined) this.processedMessageIds.delete(first);
+        }
+      }
+
       await next();
     });
   }
@@ -780,5 +795,10 @@ export class TelegramBridge {
         console.log(`[Bridge] Target DSH Host: ${this.config.dshAuthority}`);
       }
     });
+  }
+
+  public async stop() {
+    console.log(`[Bridge] Stopping Telegram bot gracefully...`);
+    await this.bot.stop();
   }
 }

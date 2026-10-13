@@ -22,6 +22,20 @@ async function main() {
     }
 
     const bridge = new TelegramBridge(config, dsh);
+
+    const shutdown = async (signal: string) => {
+      console.log(`\n[Shutdown] Received ${signal}, shutting down gracefully...`);
+      try {
+        await bridge.stop();
+      } catch (err: any) {
+        console.error("[Shutdown Error]:", err.message);
+      }
+      process.exit(0);
+    };
+
+    process.once("SIGINT", () => shutdown("SIGINT"));
+    process.once("SIGTERM", () => shutdown("SIGTERM"));
+
     await bridge.start();
   } catch (err: any) {
     console.error("[Fatal Error]:", err);
