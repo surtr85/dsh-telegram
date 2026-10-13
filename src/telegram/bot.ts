@@ -685,8 +685,12 @@ export class TelegramBridge {
       return;
     }
 
-    // Case 2: Response contains image(s) -> Deliver rich media post!
+    // Case 2: Response contains image(s) -> Deliver rich media post or cohesive album!
     try {
+      const formattedText = formatToTelegramHtml(textWithoutImages).trim();
+      const fitsCaption = formattedText.length > 0 && formattedText.length <= 1024;
+
+      const photoInputs: Array<{ input: string | InputFile; alt?: string }> = [];
       for (const img of images) {
         let photoInput: string | InputFile | null = null;
 
@@ -703,52 +707,62 @@ export class TelegramBridge {
         }
 
         if (photoInput) {
-          const formattedCaption = formatToTelegramHtml(textWithoutImages);
-          // If the post is within Telegram caption limit (1024 chars), send photo with caption!
-          if (images.length === 1 && formattedCaption.length > 0 && formattedCaption.length <= 1024) {
-            try {
-              await ctx.replyWithPhoto(photoInput, {
-                caption: formattedCaption,
-                parse_mode: "HTML"
-              });
-              await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
-              return;
-            } catch (err: any) {
-              console.error("[Photo Caption Error]:", err.message);
+          photoInputs.push({ input: photoInput, alt: img.alt });
+        }
+      }
+
+      if (photoInputs.length === 0) {
+        await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, formattedText, {
+          parse_mode: "HTML"
+        });
+        return;
+      }
+
+      // Subcase 2A: Single Image
+      if (photoInputs.length === 1) {
+        const single = photoInputs[0];
+        if (fitsCaption) {
+          await ctx.replyWithPhoto(single.input, {
+            caption: formattedText,
+            parse_mode: "HTML"
+          });
+        } else {
+          await ctx.replyWithPhoto(single.input, {
+            caption: single.alt ? `🖼 <b>${escapeHtml(single.alt)}</b>` : undefined,
+            parse_mode: "HTML"
+          });
+          if (formattedText.length > 0) {
+            const chunks = chunkHtmlMessage(formattedText);
+            for (const chunk of chunks) {
+              await ctx.reply(chunk, { parse_mode: "HTML" });
             }
           }
-
-          // If text is longer than 1024 chars, send the photo with alt label, then send text chunks below it
-          try {
-            const photoAlt = img.alt ? `🖼 <b>${escapeHtml(img.alt)}</b>` : undefined;
-            await ctx.replyWithPhoto(photoInput, {
-              caption: photoAlt,
-              parse_mode: "HTML"
-            });
-          } catch (err: any) {
-            console.error("[Photo Delivery Error]:", err.message);
-          }
         }
+        await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+        return;
       }
 
-      // Send the remaining formatted text chunks below the media
-      const formattedHtml = formatToTelegramHtml(textWithoutImages);
-      if (formattedHtml.trim()) {
-        const chunks = chunkHtmlMessage(formattedHtml);
+      // Subcase 2B: Multiple Images -> True Telegram MediaGroup Album!
+      const mediaGroup = photoInputs.map((item, idx) => ({
+        type: "photo" as const,
+        media: item.input,
+        caption: idx === 0 && fitsCaption ? formattedText : undefined,
+        parse_mode: idx === 0 && fitsCaption ? ("HTML" as const) : undefined
+      }));
+
+      await ctx.api.sendMediaGroup(ctx.chat.id, mediaGroup);
+
+      // If text exceeds 1024 chars, deliver as subsequent text message
+      if (!fitsCaption && formattedText.length > 0) {
+        const chunks = chunkHtmlMessage(formattedText);
         for (const chunk of chunks) {
-          try {
-            await ctx.reply(chunk, { parse_mode: "HTML" });
-          } catch (err: any) {
-            await ctx.reply(stripHtml(chunk)).catch(() => {});
-          }
+          await ctx.reply(chunk, { parse_mode: "HTML" });
         }
       }
 
-      // Clean up the initial status placeholder
       await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
     } catch (err: any) {
       console.error("[Media Delivery Error]:", err.message);
-      // Fallback to text editing
       const formattedHtml = formatToTelegramHtml(rawText);
       await ctx.api
         .editMessageText(ctx.chat.id, statusMsg.message_id, stripHtml(formattedHtml))
