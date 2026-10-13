@@ -37,9 +37,8 @@ export function formatToTelegramHtml(markdown: string): string {
       // Paragraphs -> replace with paragraph breaks (without eating <pre>!)
       .replace(/<p\b[^>]*>([\s\S]*?)<\/p>/gi, "$1\n\n")
       // Lists (unordered and ordered)
-      .replace(/<ul\b[^>]*>([\s\S]*?)<\/ul>/gi, "$1\n")
-      .replace(/<ol\b[^>]*>([\s\S]*?)<\/ol>/gi, "$1\n")
       .replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, "• $1\n")
+      .replace(/<\/?(ul|ol|li)\b[^>]*>/gi, "")
       // Formatting tags (Bold, Italic, Strikethrough)
       .replace(/<strong\b[^>]*>([\s\S]*?)<\/strong>/gi, "<b>$1</b>")
       .replace(/<b\b[^>]*>([\s\S]*?)<\/b>/gi, "<b>$1</b>")
@@ -52,8 +51,8 @@ export function formatToTelegramHtml(markdown: string): string {
       // Horizontal rules and line breaks
       .replace(/<hr\s*\/?>/gi, "\n———\n\n")
       .replace(/<br\s*\/?>/gi, "\n")
-      // Strip unsupported HTML elements (tables, divs, spans)
-      .replace(/<\/?(div|span|table|thead|tbody|tr|td|th)\b[^>]*>/gi, "")
+      // Strip any tag NOT officially supported by Telegram HTML
+      .replace(/<\/?(?!(\/?(b|strong|i|em|u|ins|s|strike|del|tg-spoiler|a|code|pre|blockquote|tg-emoji))\b)[a-z0-9_-]+[^>]*>/gi, "")
       // Entities cleanup
       .replace(/&quot;/g, "\"")
       .replace(/&#39;/g, "'")
