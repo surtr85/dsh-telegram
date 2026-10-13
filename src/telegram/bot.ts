@@ -118,6 +118,7 @@ export class TelegramBridge {
   private setupMiddleware() {
     this.bot.use(async (ctx, next) => {
       const fromId = ctx.from?.id;
+      if (ctx.from?.is_bot) return;
       if (fromId !== this.config.allowedUserId) {
         console.warn(`[Security] Dropping message from unauthorized user: ${fromId}`);
         return;
