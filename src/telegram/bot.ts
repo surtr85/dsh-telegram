@@ -19,12 +19,32 @@ function escapeHtml(str: string): string {
     .replace(/>/g, "&gt;");
 }
 
+interface MediaGroupItem {
+  type: "photo" | "document";
+  fileId: string;
+  fileUniqueId: string;
+  mimeType: string;
+  fileName?: string;
+}
+
+interface MediaGroupBuffer {
+  mediaGroupId: string;
+  ctx: any;
+  sessionId: string;
+  items: MediaGroupItem[];
+  caption?: string;
+  statusMsg?: any;
+  timer: NodeJS.Timeout;
+}
+
 export class TelegramBridge {
   private bot: Bot;
   private config: AppConfig;
   private dsh: DshClient;
   private currentSessionId: string | null = null;
   private sessionStateFile: string;
+  private mediaGroupBuffers = new Map<string, MediaGroupBuffer>();
+  private sessionLocks = new Map<string, Promise<void>>();
 
   constructor(config: AppConfig, dshClient: DshClient) {
     this.config = config;
@@ -242,11 +262,81 @@ export class TelegramBridge {
     });
   }
 
+  private async enqueueSessionTurn(sessionId: string, fn: () => Promise<void>) {
+    const prev = this.sessionLocks.get(sessionId) || Promise.resolve();
+    const next = (async () => {
+      try {
+        await prev;
+      } catch {}
+      await fn();
+    })();
+    this.sessionLocks.set(sessionId, next);
+    return next;
+  }
+
   private setupMessageHandler() {
     this.bot.on(["message:text", "message:photo", "message:document"], async (ctx) => {
       if (ctx.message.text?.startsWith("/") || ctx.message.caption?.startsWith("/")) return;
 
       const sessionId = await this.resolveSession();
+
+      // 0. Media Group (Album) handling
+      const mediaGroupId = ctx.message.media_group_id;
+      if (
+        mediaGroupId &&
+        (ctx.message.photo || (ctx.message.document && ctx.message.document.mime_type?.startsWith("image/")))
+      ) {
+        let item: MediaGroupItem | null = null;
+        if (ctx.message.photo) {
+          const photos = ctx.message.photo;
+          const bestPhoto = photos[photos.length - 1];
+          item = {
+            type: "photo",
+            fileId: bestPhoto.file_id,
+            fileUniqueId: bestPhoto.file_unique_id,
+            mimeType: "image/jpeg"
+          };
+        } else if (ctx.message.document) {
+          const doc = ctx.message.document;
+          item = {
+            type: "document",
+            fileId: doc.file_id,
+            fileUniqueId: doc.file_unique_id,
+            mimeType: doc.mime_type || "image/jpeg",
+            fileName: doc.file_name
+          };
+        }
+
+        let buffer = this.mediaGroupBuffers.get(mediaGroupId);
+        if (buffer) {
+          if (item) buffer.items.push(item);
+          if (ctx.message.caption?.trim() && !buffer.caption) {
+            buffer.caption = ctx.message.caption.trim();
+          }
+          clearTimeout(buffer.timer);
+          buffer.timer = setTimeout(() => this.processMediaGroup(mediaGroupId), 1000);
+        } else {
+          const statusMsg = await ctx.reply(
+            "⏳ <i>در حال دریافت آلبوم تصاویر...</i>",
+            {
+              parse_mode: "HTML",
+              reply_parameters: { message_id: ctx.message.message_id }
+            }
+          );
+
+          buffer = {
+            mediaGroupId,
+            ctx,
+            sessionId,
+            items: item ? [item] : [],
+            caption: ctx.message.caption?.trim(),
+            statusMsg,
+            timer: setTimeout(() => this.processMediaGroup(mediaGroupId), 1000)
+          };
+          this.mediaGroupBuffers.set(mediaGroupId, buffer);
+        }
+        return;
+      }
 
       // 1. Photo with optional caption
       if (ctx.message.photo) {
@@ -288,7 +378,9 @@ export class TelegramBridge {
             }
           ];
 
-          await this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg);
+          await this.enqueueSessionTurn(sessionId, () =>
+            this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg)
+          );
         } catch (err: any) {
           await ctx.api.editMessageText(
             ctx.chat.id,
@@ -341,7 +433,9 @@ export class TelegramBridge {
             }
           ];
 
-          await this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg);
+          await this.enqueueSessionTurn(sessionId, () =>
+            this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg)
+          );
         } catch (err: any) {
           await ctx.api.editMessageText(
             ctx.chat.id,
@@ -364,112 +458,194 @@ export class TelegramBridge {
           reply_parameters: { message_id: ctx.message.message_id }
         });
 
-        await this.handleSessionTurn(ctx, sessionId, userText, statusMsg);
+        await this.enqueueSessionTurn(sessionId, () =>
+          this.handleSessionTurn(ctx, sessionId, userText, statusMsg)
+        );
         return;
       }
     });
   }
 
-  private async handleSessionTurn(
+  private async processMediaGroup(mediaGroupId: string) {
+    const buffer = this.mediaGroupBuffers.get(mediaGroupId);
+    if (!buffer) return;
+    this.mediaGroupBuffers.delete(mediaGroupId);
+
+    const { ctx, sessionId, items, caption, statusMsg } = buffer;
+    const finalCaption = caption || "تصاویر ارسالی از تلگرام. لطفاً بررسی و تحلیل کنید.";
+
+    console.log(
+      `[Bridge] Processing media group ${mediaGroupId} with ${items.length} items (caption: "${finalCaption.slice(0, 40)}")`
+    );
+
+    try {
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        `⏳ <i>در حال دانلود ${items.length} تصویر و ارسال به مدل هوش مصنوعی...</i>`,
+        { parse_mode: "HTML" }
+      );
+
+      const downloadedParts: PromptContentPart[] = await Promise.all(
+        items.map(async (item, idx) => {
+          const file = await ctx.api.getFile(item.fileId);
+          if (!file.file_path) throw new Error(`Could not retrieve file path for image ${idx + 1}`);
+          const fileUrl = `https://api.telegram.org/file/bot${this.config.telegramToken}/${file.file_path}`;
+          const res = await fetch(fileUrl);
+          if (!res.ok) throw new Error(`Download failed for image ${idx + 1}: ${res.statusText}`);
+          const arrayBuffer = await res.arrayBuffer();
+          const base64 = Buffer.from(arrayBuffer).toString("base64");
+          const ext = item.mimeType === "image/png" ? "png" : "jpg";
+          const name = item.fileName || `telegram_${item.fileUniqueId}.${ext}`;
+
+          let mediaType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" = "image/jpeg";
+          if (item.mimeType === "image/png") mediaType = "image/png";
+          else if (item.mimeType === "image/webp") mediaType = "image/webp";
+          else if (item.mimeType === "image/gif") mediaType = "image/gif";
+
+          return {
+            type: "image" as const,
+            mediaType,
+            data: base64,
+            name
+          };
+        })
+      );
+
+      const promptContent: PromptContentPart[] = [
+        ...downloadedParts,
+        {
+          type: "text",
+          text: finalCaption
+        }
+      ];
+
+      await this.enqueueSessionTurn(sessionId, () =>
+        this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg)
+      );
+    } catch (err: any) {
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        `❌ <b>خطا در دریافت آلبوم تصاویر:</b> <code>${escapeHtml(err.message)}</code>`,
+        { parse_mode: "HTML" }
+      );
+    }
+  }
+
+  private handleSessionTurn(
     ctx: any,
     sessionId: string,
     promptContent: string | PromptContentPart[],
     statusMsg: any
-  ) {
-    let currentHtml = "⏳ <i>DSH is thinking...</i>";
-    let lastEditedHtml = currentHtml;
-    let lastEditTime = Date.now();
-    let completed = false;
-    let updateTimer: NodeJS.Timeout | null = null;
-    let unsubscribe: (() => void) | null = null;
+  ): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let currentHtml = "⏳ <i>DSH is thinking...</i>";
+      let lastEditedHtml = currentHtml;
+      let lastEditTime = Date.now();
+      let completed = false;
+      let updateTimer: NodeJS.Timeout | null = null;
+      let unsubscribe: (() => void) | null = null;
 
-    const scheduleEdit = (newHtml: string, force = false) => {
-      currentHtml = newHtml;
-      const now = Date.now();
-      const elapsed = now - lastEditTime;
-
-      if (force || elapsed >= 1500) {
+      const finish = () => {
+        if (completed) return;
+        completed = true;
         if (updateTimer) {
           clearTimeout(updateTimer);
           updateTimer = null;
         }
-        lastEditTime = now;
-        if (newHtml !== lastEditedHtml) {
-          lastEditedHtml = newHtml;
-          ctx.api
-            .editMessageText(ctx.chat.id, statusMsg.message_id, newHtml, {
-              parse_mode: "HTML"
-            })
-            .catch(() => {
-              ctx.api
-                .editMessageText(
-                  ctx.chat.id,
-                  statusMsg.message_id,
-                  newHtml.replace(/<[^>]*>/g, "")
-                )
-                .catch(() => {});
-            });
-        }
-      } else if (!updateTimer) {
-        updateTimer = setTimeout(() => {
-          updateTimer = null;
-          scheduleEdit(currentHtml, true);
-        }, 1500 - elapsed);
-      }
-    };
-
-    try {
-      unsubscribe = this.dsh.followSession(sessionId, {
-        onToolCall: (name, desc) => {
-          const shortDesc = desc ? ` <code>${escapeHtml(desc.slice(0, 45))}</code>` : "";
-          scheduleEdit(
-            `⚙️ <b>Executing tool:</b> <code>${escapeHtml(name)}</code>${shortDesc}\n⏳ <i>Working...</i>`
-          );
-        },
-        onToolResult: (name) => {
-          scheduleEdit(
-            `✅ <b>Finished tool:</b> <code>${escapeHtml(name)}</code>\n⏳ <i>Analyzing output...</i>`
-          );
-        },
-        onAssistantMessage: async (text, isFinal) => {
-          if (isFinal) {
-            completed = true;
-            if (updateTimer) clearTimeout(updateTimer);
-
-            await this.deliverAssistantResponse(ctx, statusMsg, text);
-
-            if (unsubscribe) {
-              unsubscribe();
-              unsubscribe = null;
-            }
-          } else {
-            const preview = formatToTelegramHtml(text.slice(-300));
-            scheduleEdit(`💭 <b>Assistant Update:</b>\n\n${preview}`);
-          }
-        },
-        onError: (err) => {
-          console.error(`[Follow Stream Error]:`, err.message);
-        }
-      });
-
-      await this.dsh.sendPrompt(sessionId, promptContent);
-
-      // Safety timeout after 10 minutes
-      setTimeout(() => {
-        if (!completed && unsubscribe) {
+        if (unsubscribe) {
           unsubscribe();
-          scheduleEdit(`⚠️ <i>Turn timed out after 10m. Check DSH Web GUI for status.</i>`, true);
+          unsubscribe = null;
         }
-      }, 600000);
-    } catch (err: any) {
-      if (unsubscribe) unsubscribe();
-      await ctx.api.editMessageText(
-        ctx.chat.id,
-        statusMsg.message_id,
-        `❌ <b>Error communicating with DSH:</b>\n<code>${escapeHtml(err.message)}</code>`,
-        { parse_mode: "HTML" }
-      );
-    }
+        resolve();
+      };
+
+      const scheduleEdit = (newHtml: string, force = false) => {
+        currentHtml = newHtml;
+        const now = Date.now();
+        const elapsed = now - lastEditTime;
+
+        if (force || elapsed >= 1500) {
+          if (updateTimer) {
+            clearTimeout(updateTimer);
+            updateTimer = null;
+          }
+          lastEditTime = now;
+          if (newHtml !== lastEditedHtml) {
+            lastEditedHtml = newHtml;
+            ctx.api
+              .editMessageText(ctx.chat.id, statusMsg.message_id, newHtml, {
+                parse_mode: "HTML"
+              })
+              .catch(() => {
+                ctx.api
+                  .editMessageText(
+                    ctx.chat.id,
+                    statusMsg.message_id,
+                    newHtml.replace(/<[^>]*>/g, "")
+                  )
+                  .catch(() => {});
+              });
+          }
+        } else if (!updateTimer) {
+          updateTimer = setTimeout(() => {
+            updateTimer = null;
+            scheduleEdit(currentHtml, true);
+          }, 1500 - elapsed);
+        }
+      };
+
+      try {
+        unsubscribe = this.dsh.followSession(sessionId, {
+          onToolCall: (name, desc) => {
+            const shortDesc = desc ? ` <code>${escapeHtml(desc.slice(0, 45))}</code>` : "";
+            scheduleEdit(
+              `⚙️ <b>Executing tool:</b> <code>${escapeHtml(name)}</code>${shortDesc}\n⏳ <i>Working...</i>`
+            );
+          },
+          onToolResult: (name) => {
+            scheduleEdit(
+              `✅ <b>Finished tool:</b> <code>${escapeHtml(name)}</code>\n⏳ <i>Analyzing output...</i>`
+            );
+          },
+          onAssistantMessage: async (text, isFinal) => {
+            if (isFinal) {
+              await this.deliverAssistantResponse(ctx, statusMsg, text);
+              finish();
+            } else {
+              const preview = formatToTelegramHtml(text.slice(-300));
+              scheduleEdit(`💭 <b>Assistant Update:</b>\n\n${preview}`);
+            }
+          },
+          onError: (err) => {
+            console.error(`[Follow Stream Error]:`, err.message);
+          }
+        });
+
+        this.dsh.sendPrompt(sessionId, promptContent).catch((err) => {
+          scheduleEdit(
+            `❌ <b>Error submitting prompt:</b> <code>${escapeHtml(err.message)}</code>`,
+            true
+          );
+          finish();
+        });
+
+        // Safety timeout after 10 minutes
+        setTimeout(() => {
+          if (!completed) {
+            scheduleEdit(`⚠️ <i>Turn timed out after 10m. Check DSH Web GUI for status.</i>`, true);
+            finish();
+          }
+        }, 600000);
+      } catch (err: any) {
+        scheduleEdit(
+          `❌ <b>Error communicating with DSH:</b>\n<code>${escapeHtml(err.message)}</code>`,
+          true
+        );
+        finish();
+      }
+    });
   }
 
   /**
