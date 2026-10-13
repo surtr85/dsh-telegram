@@ -40,6 +40,39 @@ export interface SessionItem {
   };
 }
 
+export interface ModelEffort {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface ModelReasoning {
+  efforts: ModelEffort[];
+  defaultEffort?: string;
+}
+
+export interface ModelCatalogEntry {
+  id: string;
+  name: string;
+  description?: string;
+  reasoning?: ModelReasoning;
+}
+
+export interface ModelProviderGroup {
+  id: string;
+  name: string;
+  models: ModelCatalogEntry[];
+}
+
+export interface ModelCatalog {
+  default: {
+    provider: string;
+    model: string;
+  };
+  routableProviders: string[];
+  groups: ModelProviderGroup[];
+}
+
 export interface StreamEventHandlers {
   onAssistantTextChunk?: (chunk: string) => void;
   onAssistantMessage?: (text: string, isFinal: boolean) => void;
@@ -142,6 +175,57 @@ export class DshClient {
       }
     });
     return requestId;
+  }
+
+  public async cancelSession(sessionId: string): Promise<boolean> {
+    const res = await this.rpcCall<{ accepted: boolean }>("session/cancel", {
+      request: {
+        sessionId
+      }
+    });
+    return res.accepted ?? true;
+  }
+
+  public async getModelCatalog(): Promise<ModelCatalog> {
+    return await this.rpcCall<ModelCatalog>("session/modelCatalog", {});
+  }
+
+  public async selectModel(
+    sessionId: string,
+    provider: string,
+    model: string,
+    reasoningEffort?: string
+  ): Promise<{ provider: string; model: string; reasoningEffort?: string }> {
+    const res = await this.rpcCall<{ selected: { provider: string; model: string; reasoningEffort?: string } }>(
+      "session/selectModel",
+      {
+        request: {
+          sessionId,
+          provider,
+          model,
+          ...(reasoningEffort ? { reasoningEffort } : {})
+        }
+      }
+    );
+    return res.selected;
+  }
+
+  public async renameSession(sessionId: string, title: string): Promise<{ title: string; seq: number }> {
+    return await this.rpcCall<{ title: string; seq: number }>("session/rename", {
+      request: {
+        sessionId,
+        title
+      }
+    });
+  }
+
+  public async forkSession(sessionId: string, atSeq?: number): Promise<{ sessionId: string }> {
+    return await this.rpcCall<{ sessionId: string }>("session/fork", {
+      request: {
+        sessionId,
+        ...(typeof atSeq === "number" ? { atSeq } : {})
+      }
+    });
   }
 
   public followSession(sessionId: string, handlers: StreamEventHandlers): () => void {

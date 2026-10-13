@@ -46,6 +46,8 @@ export class TelegramBridge {
   private mediaGroupBuffers = new Map<string, MediaGroupBuffer>();
   private sessionLocks = new Map<string, Promise<void>>();
   private processedMessageIds = new Set<number>();
+  private activeTurns = new Map<string, { abort: () => void; statusMsgId?: number; chatId?: number }>();
+  private modelCatalogCache: Array<{ provider: string; model: string; name: string }> = [];
 
   constructor(config: AppConfig, dshClient: DshClient) {
     this.config = config;
@@ -146,12 +148,15 @@ export class TelegramBridge {
           `🆔 <code>${sessionId}</code>\n` +
           `🧠 <b>Model:</b> <code>${escapeHtml(model)}</code>\n\n` +
           `<b>Commands & Capabilities:</b>\n` +
-          `• 💬 Send any text, photo, or screenshot with caption.\n` +
-          `• 🖼 Receive rich posts with images, code blocks, and formatting.\n` +
-          `• <code>/new</code> - Start a brand new session.\n` +
-          `• <code>/session</code> - Show details & token metrics for this session.\n` +
-          `• <code>/sessions</code> - Browse & switch between recent sessions.\n` +
-          `• <code>/attach</code> - Re-attach to newest active Web GUI session.`;
+          `• 💬 ارسال متن، تصویر، اسکرین‌شات یا کدهای متنی (Python, JS, TS, JSON, ...)\n` +
+          `• 🖼 دریافت پاسخ‌های غنی با مدیا، بلوک‌های کد و آلبوم تصاویر\n` +
+          `• <code>/new</code> - ایجاد سشن کاری جدید\n` +
+          `• <code>/session</code> - نمایش وضعیت، مسیر کاری و توکن‌های سشن\n` +
+          `• <code>/sessions</code> - مشاهده سشن‌های اخیر و سوییچ سریع\n` +
+          `• <code>/attach</code> - اتصال مجدد به آخرین سشن فعال Web GUI\n` +
+          `• <code>/model</code> - مشاهده و انتخاب مدل هوش مصنوعی\n` +
+          `• <code>/rename &lt;عنوان&gt;</code> - تغییر نام سشن جاری\n` +
+          `• <code>/stop</code> - توقف فوری فرآیند در حال اجرا`;
 
         await ctx.reply(text, { parse_mode: "HTML" });
       } catch (err: any) {
@@ -274,6 +279,130 @@ export class TelegramBridge {
         `✅ <b>Active Session Switched</b>\n🆔 <code>${targetSessionId}</code>\nSubsequent messages will route here.`,
         { parse_mode: "HTML" }
       );
+    });
+
+    // /stop and /cancel
+    this.bot.command(["stop", "cancel"], async (ctx) => {
+      try {
+        const sessionId = await this.resolveSession();
+        const active = this.activeTurns.get(sessionId);
+        if (active) {
+          active.abort();
+          this.activeTurns.delete(sessionId);
+        }
+        await this.dsh.cancelSession(sessionId);
+        await ctx.reply(
+          `🛑 <b>فرمان توقف ارسال شد.</b>\nعملیات جاری سشن <code>${sessionId}</code> متوقف شد.`,
+          { parse_mode: "HTML" }
+        );
+      } catch (err: any) {
+        await ctx.reply(`❌ خطا در لغو عملیات: ${escapeHtml(err.message)}`, {
+          parse_mode: "HTML"
+        });
+      }
+    });
+
+    // /rename
+    this.bot.command("rename", async (ctx) => {
+      const newTitle = ctx.match?.trim();
+      if (!newTitle) {
+        await ctx.reply(
+          "📌 لطفاً عنوان جدید را مشخص کنید:\nمثال: <code>/rename پروژه جدید من</code>",
+          { parse_mode: "HTML" }
+        );
+        return;
+      }
+      try {
+        const sessionId = await this.resolveSession();
+        await this.dsh.renameSession(sessionId, newTitle);
+        await ctx.reply(
+          `✏️ <b>عنوان سشن تغییر یافت:</b>\n📌 ${escapeHtml(newTitle)}\n🆔 <code>${sessionId}</code>`,
+          { parse_mode: "HTML" }
+        );
+      } catch (err: any) {
+        await ctx.reply(`❌ خطا در تغییر نام سشن: ${escapeHtml(err.message)}`, {
+          parse_mode: "HTML"
+        });
+      }
+    });
+
+    // /model
+    this.bot.command("model", async (ctx) => {
+      try {
+        const sessionId = await this.resolveSession();
+        const sessions = await this.dsh.listSessions();
+        const current = sessions.find((s) => s.sessionId === sessionId);
+        const activeModel =
+          current?.projections?.values?.modelSelection?.lastUsed ||
+          current?.projections?.values?.modelSelection?.next;
+
+        const catalog = await this.dsh.getModelCatalog();
+        this.modelCatalogCache = [];
+        const keyboard = new InlineKeyboard();
+
+        let text =
+          `🧠 <b>مدیریت مدل هوش مصنوعی</b>\n\n` +
+          `📌 <b>مدل جاری سشن:</b> <code>${escapeHtml(activeModel?.model || catalog.default?.model || "نامشخص")}</code>\n` +
+          `🏢 <b>سرویس‌دهنده:</b> <code>${escapeHtml(activeModel?.provider || catalog.default?.provider || "پیش‌فرض")}</code>\n\n` +
+          `برای تغییر مدل، یکی از گزینه‌های زیر را انتخاب کنید:\n`;
+
+        let counter = 0;
+        for (const group of catalog.groups) {
+          for (const m of group.models) {
+            const idx = this.modelCatalogCache.length;
+            this.modelCatalogCache.push({
+              provider: group.id,
+              model: m.id,
+              name: m.name
+            });
+            const isCurrent =
+              activeModel?.provider === group.id && activeModel?.model === m.id;
+            keyboard.text(
+              `${isCurrent ? "✅ " : ""}${m.name.slice(0, 24)}`,
+              `mdl:${idx}`
+            );
+            counter++;
+            if (counter % 2 === 0) keyboard.row();
+          }
+        }
+
+        await ctx.reply(text, {
+          parse_mode: "HTML",
+          reply_markup: keyboard
+        });
+      } catch (err: any) {
+        await ctx.reply(`❌ خطا در دریافت کاتالوگ مدل‌ها: ${escapeHtml(err.message)}`, {
+          parse_mode: "HTML"
+        });
+      }
+    });
+
+    // Handle inline button callbacks for model switching
+    this.bot.callbackQuery(/^mdl:(\d+)$/, async (ctx) => {
+      const idx = parseInt(ctx.match[1], 10);
+      const selected = this.modelCatalogCache[idx];
+      if (!selected) {
+        await ctx.answerCallbackQuery({ text: "مدل یافت نشد یا منقضی شده است." });
+        return;
+      }
+
+      try {
+        const sessionId = await this.resolveSession();
+        await this.dsh.selectModel(sessionId, selected.provider, selected.model);
+        await ctx.answerCallbackQuery({
+          text: `مدل به ${selected.name} تغییر یافت.`
+        });
+        await ctx.editMessageText(
+          `✅ <b>مدل هوش مصنوعی به‌روزرسانی شد</b>\n\n` +
+          `🤖 <b>مدل انتخابی:</b> <code>${escapeHtml(selected.name)}</code>\n` +
+          `🆔 <b>شناسه مدل:</b> <code>${escapeHtml(selected.model)}</code>\n` +
+          `🏢 <b>سرویس‌دهنده:</b> <code>${escapeHtml(selected.provider)}</code>\n` +
+          `📌 <b>سشن:</b> <code>${sessionId}</code>`,
+          { parse_mode: "HTML" }
+        );
+      } catch (err: any) {
+        await ctx.answerCallbackQuery({ text: `خطا: ${err.message}` });
+      }
     });
   }
 
@@ -462,6 +591,63 @@ export class TelegramBridge {
         return;
       }
 
+      // 2.5. Text or Code document (e.g. .py, .ts, .json, .txt, .md, .log, etc.)
+      if (ctx.message.document) {
+        const doc = ctx.message.document;
+        const fileName = doc.file_name || "document.txt";
+        const caption = ctx.message.caption?.trim() || "";
+
+        console.log(
+          `[Bridge] Received document from user ${ctx.from?.id} (name: ${fileName}, mime: ${doc.mime_type})`
+        );
+        const statusMsg = await ctx.reply("⏳ <i>در حال دریافت و پردازش سند متنی در DSH...</i>", {
+          parse_mode: "HTML",
+          reply_parameters: { message_id: ctx.message.message_id }
+        });
+
+        try {
+          const file = await ctx.api.getFile(doc.file_id);
+          if (!file.file_path) throw new Error("Could not retrieve file path from Telegram");
+          const fileUrl = `https://api.telegram.org/file/bot${this.config.telegramToken}/${file.file_path}`;
+          const res = await fetch(fileUrl);
+          if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
+          const arrayBuffer = await res.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+
+          // Check if binary or text (first 1KB has null bytes)
+          const isProbablyText = !buffer.slice(0, 1024).includes(0);
+          if (!isProbablyText) {
+            await ctx.api.editMessageText(
+              ctx.chat.id,
+              statusMsg.message_id,
+              `⚠️ فایل <code>${escapeHtml(fileName)}</code> باینری است. لطفاً فایل متنی/کد یا تصویر ارسال کنید.`,
+              { parse_mode: "HTML" }
+            );
+            return;
+          }
+
+          const fileContent = buffer.toString("utf-8");
+          const maxSnippet = fileContent.slice(0, 100000);
+          const truncatedNotice = fileContent.length > 100000 ? "\n... (truncated)" : "";
+
+          const prompt = caption
+            ? `${caption}\n\n[Attached File: ${fileName}]\n\`\`\`\n${maxSnippet}${truncatedNotice}\n\`\`\``
+            : `بررسی فایل ارسالی (${fileName}):\n\`\`\`\n${maxSnippet}${truncatedNotice}\n\`\`\`\nلطفاً این فایل را بررسی کنید.`;
+
+          await this.enqueueSessionTurn(sessionId, () =>
+            this.handleSessionTurn(ctx, sessionId, prompt, statusMsg)
+          );
+        } catch (err: any) {
+          await ctx.api.editMessageText(
+            ctx.chat.id,
+            statusMsg.message_id,
+            `❌ <b>خطا در پردازش فایل:</b> <code>${escapeHtml(err.message)}</code>`,
+            { parse_mode: "HTML" }
+          );
+        }
+        return;
+      }
+
       // 3. Plain text message
       if (ctx.message.text) {
         const userText = ctx.message.text.trim();
@@ -565,6 +751,7 @@ export class TelegramBridge {
       const finish = () => {
         if (completed) return;
         completed = true;
+        this.activeTurns.delete(sessionId);
         if (updateTimer) {
           clearTimeout(updateTimer);
           updateTimer = null;
@@ -575,6 +762,15 @@ export class TelegramBridge {
         }
         resolve();
       };
+
+      this.activeTurns.set(sessionId, {
+        abort: () => {
+          scheduleEdit("🛑 <b>عملیات لغو شد.</b>", true);
+          finish();
+        },
+        statusMsgId: statusMsg.message_id,
+        chatId: ctx.chat.id
+      });
 
       const scheduleEdit = (newHtml: string, force = false) => {
         currentHtml = newHtml;
@@ -788,6 +984,23 @@ export class TelegramBridge {
   public async start() {
     await this.bot.init();
     console.log(`[Bridge] Starting Telegram bot (@${this.bot.botInfo.username})...`);
+
+    try {
+      await this.bot.api.setMyCommands([
+        { command: "start", description: "راهنما و وضعیت" },
+        { command: "new", description: "ایجاد سشن جدید" },
+        { command: "session", description: "مشخصات و توکن‌های سشن جاری" },
+        { command: "sessions", description: "لیست و سوییچ بین سشن‌ها" },
+        { command: "attach", description: "اتصال به سشن فعال Web GUI" },
+        { command: "model", description: "مشاهده و تغییر مدل هوش مصنوعی" },
+        { command: "rename", description: "تغییر نام سشن جاری" },
+        { command: "stop", description: "توقف فوری عملیات جاری" }
+      ]);
+      console.log("[Bridge] Telegram bot commands registered successfully.");
+    } catch (err: any) {
+      console.warn("[Bridge] Failed to register bot commands:", err.message);
+    }
+
     await this.bot.start({
       onStart: (info) => {
         console.log(`[Bridge] Connected successfully as @${info.username} (ID: ${info.id})`);
