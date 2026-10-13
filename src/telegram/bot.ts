@@ -11,6 +11,8 @@ import {
   chunkHtmlMessage,
   extractImages
 } from "./formatter.js";
+import { TopicStore, TopicBinding } from "./topic-store.js";
+import { formatTopicTitle } from "./topic-utils.js";
 
 function escapeHtml(str: string): string {
   return str
@@ -51,6 +53,7 @@ interface MediaGroupBuffer {
   mediaGroupId: string;
   ctx: any;
   sessionId: string;
+  messageThreadId?: number;
   items: MediaGroupItem[];
   caption?: string;
   statusMsg?: any;
@@ -63,6 +66,7 @@ export class TelegramBridge {
   private dsh: DshClient;
   private currentSessionId: string | null = null;
   private sessionStateFile: string;
+  private topicStore: TopicStore;
   private mediaGroupBuffers = new Map<string, MediaGroupBuffer>();
   private sessionLocks = new Map<string, Promise<void>>();
   private processedMessageIds = new Set<number>();
@@ -74,6 +78,7 @@ export class TelegramBridge {
     this.dsh = dshClient;
     this.bot = new Bot(config.telegramToken);
     this.sessionStateFile = path.join(config.defaultCwd, ".dsh-session");
+    this.topicStore = new TopicStore(path.join(config.defaultCwd, ".dsh-topics.json"));
 
     this.loadPersistedSession();
     this.setupPlugins();
@@ -151,12 +156,50 @@ export class TelegramBridge {
     return created.sessionId;
   }
 
+  private async resolveSessionForContext(
+    ctx: any
+  ): Promise<{ sessionId: string; topicId?: number }> {
+    const messageThreadId =
+      ctx.message?.message_thread_id || ctx.callbackQuery?.message?.message_thread_id;
+    if (messageThreadId) {
+      const binding = this.topicStore.getBinding(ctx.chat.id, messageThreadId);
+      if (binding) {
+        return { sessionId: binding.sessionId, topicId: messageThreadId };
+      }
+      // Auto-bind unmapped topic to a new session
+      const created = await this.dsh.createSession();
+      const title = formatTopicTitle(ctx.message?.text || `Topic ${messageThreadId}`);
+      this.topicStore.setBinding(ctx.chat.id, messageThreadId, created.sessionId, title);
+      await this.dsh.renameSession(created.sessionId, title).catch(() => {});
+      return { sessionId: created.sessionId, topicId: messageThreadId };
+    }
+
+    const sessionId = await this.resolveSession();
+    return { sessionId };
+  }
+
+  private async syncTopicTitleIfChanged(sessionId: string, chatId: number, topicId?: number) {
+    if (!topicId) return;
+    try {
+      const proj = await this.dsh.getSessionProjections(sessionId);
+      const dshTitle = proj?.values?.title;
+      if (dshTitle) {
+        const binding = this.topicStore.getBinding(chatId, topicId);
+        if (binding && binding.title !== dshTitle) {
+          const cleanTitle = formatTopicTitle(dshTitle);
+          await this.bot.api.editForumTopic(chatId, topicId, { name: cleanTitle }).catch(() => {});
+          this.topicStore.updateTitle(chatId, topicId, cleanTitle);
+        }
+      }
+    } catch {}
+  }
+
   private setupCommands() {
     // /start
     this.bot.command("start", async (ctx) => {
       console.log(`[Bridge] Received /start from user ${ctx.from?.id}`);
       try {
-        const sessionId = await this.resolveSession();
+        const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
         const sessions = await this.dsh.listSessions();
         const current = sessions.find((s) => s.sessionId === sessionId);
         const title = current?.projections?.values?.title || "Active DSH Workspace";
@@ -169,44 +212,89 @@ export class TelegramBridge {
           `🧠 <b>Model:</b> <code>${escapeHtml(model)}</code>\n\n` +
           `<b>Commands & Capabilities:</b>\n` +
           `• 💬 Send text prompts, photos, or code files (.ts, .py, .json, ...)\n` +
+          `• 🧵 <b>Forum Topics:</b> Each topic routes to an isolated DSH session\n` +
           `• 🖼 Receive rich media, code blocks, and formatted albums\n` +
-          `• <code>/new</code> - Start a brand new session\n` +
+          `• <code>/new</code> - Start a brand new session / topic\n` +
           `• <code>/stats</code> - Comprehensive session statistics & token metrics\n` +
           `• <code>/sessions</code> - Browse & switch between recent sessions\n` +
           `• <code>/attach</code> - Attach to active Web GUI session\n` +
           `• <code>/model</code> - Select model & reasoning effort\n` +
           `• <code>/compact</code> - Compact and summarize session history\n` +
-          `• <code>/rename &lt;title&gt;</code> - Rename current session\n` +
+          `• <code>/rename &lt;title&gt;</code> - Rename current session & topic\n` +
           `• <code>/stop</code> - Abort running turn or tool`;
 
-        await ctx.reply(text, { parse_mode: "HTML" });
+        await ctx.reply(text, { parse_mode: "HTML", message_thread_id: topicId });
       } catch (err: any) {
-        await ctx.reply(`❌ Error initializing session: ${err.message}`);
+        await ctx.reply(`❌ Error initializing session: ${err.message}`, {
+          message_thread_id: ctx.message?.message_thread_id
+        });
       }
     });
 
     // /new
     this.bot.command("new", async (ctx) => {
       try {
-        const waitMsg = await ctx.reply("✨ Creating new DSH session...");
-        const created = await this.dsh.createSession();
-        this.persistSession(created.sessionId);
+        const isForum = Boolean(ctx.chat?.is_forum);
+        if (isForum) {
+          const title = `Session ${new Date().toISOString().slice(11, 19)}`;
+          const waitMsg = await ctx.reply("✨ Creating new DSH session and forum topic...", {
+            message_thread_id: ctx.message?.message_thread_id
+          });
+          const created = await this.dsh.createSession();
+          await this.dsh.renameSession(created.sessionId, title).catch(() => {});
 
-        await ctx.api.editMessageText(
-          ctx.chat.id,
-          waitMsg.message_id,
-          `✨ <b>New DSH Session Started</b>\n🆔 <code>${created.sessionId}</code>\n\nAll subsequent messages will execute inside this session.`,
-          { parse_mode: "HTML" }
-        );
+          try {
+            const forumTopic = await ctx.api.createForumTopic(ctx.chat.id, title);
+            this.topicStore.setBinding(ctx.chat.id, forumTopic.message_thread_id, created.sessionId, title);
+
+            await ctx.api.editMessageText(
+              ctx.chat.id,
+              waitMsg.message_id,
+              `✨ <b>New DSH Session Started</b>\nTopic: <b>${escapeHtml(title)}</b>\n🆔 <code>${created.sessionId}</code>`,
+              { parse_mode: "HTML" }
+            );
+
+            await ctx.api.sendMessage(
+              ctx.chat.id,
+              `✨ <b>Session Initialized</b>\n🆔 <code>${created.sessionId}</code>\n\nAll messages in this topic route to this session.`,
+              {
+                parse_mode: "HTML",
+                message_thread_id: forumTopic.message_thread_id
+              }
+            );
+          } catch (forumErr: any) {
+            console.warn("[Bridge] createForumTopic failed, falling back:", forumErr.message);
+            this.persistSession(created.sessionId);
+            await ctx.api.editMessageText(
+              ctx.chat.id,
+              waitMsg.message_id,
+              `✨ <b>New DSH Session Started</b>\n🆔 <code>${created.sessionId}</code>`,
+              { parse_mode: "HTML" }
+            );
+          }
+        } else {
+          const waitMsg = await ctx.reply("✨ Creating new DSH session...");
+          const created = await this.dsh.createSession();
+          this.persistSession(created.sessionId);
+
+          await ctx.api.editMessageText(
+            ctx.chat.id,
+            waitMsg.message_id,
+            `✨ <b>New DSH Session Started</b>\n🆔 <code>${created.sessionId}</code>\n\nAll subsequent messages will execute inside this session.`,
+            { parse_mode: "HTML" }
+          );
+        }
       } catch (err: any) {
-        await ctx.reply(`❌ Failed to create session: ${err.message}`);
+        await ctx.reply(`❌ Failed to create session: ${err.message}`, {
+          message_thread_id: ctx.message?.message_thread_id
+        });
       }
     });
 
     // /stats (and aliases /session, /status)
     this.bot.command(["stats", "session", "status"], async (ctx) => {
       try {
-        const sessionId = await this.resolveSession();
+        const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
         const [sessions, projections] = await Promise.all([
           this.dsh.listSessions(),
           this.dsh.getSessionProjections(sessionId)
@@ -215,7 +303,8 @@ export class TelegramBridge {
 
         if (!current) {
           await ctx.reply(`Session <code>${sessionId}</code> not found in DSH catalog.`, {
-            parse_mode: "HTML"
+            parse_mode: "HTML",
+            message_thread_id: topicId
           });
           return;
         }
@@ -279,9 +368,11 @@ export class TelegramBridge {
           `├ 💾 <b>Cached Input:</b> ${cached.toLocaleString()} tok\n` +
           `└ 📤 <b>Output:</b> ${output.toLocaleString()} tok`;
 
-        await ctx.reply(info, { parse_mode: "HTML" });
+        await ctx.reply(info, { parse_mode: "HTML", message_thread_id: topicId });
       } catch (err: any) {
-        await ctx.reply(`❌ Error retrieving session statistics: ${err.message}`);
+        await ctx.reply(`❌ Error retrieving session statistics: ${err.message}`, {
+          message_thread_id: ctx.message?.message_thread_id
+        });
       }
     });
 
@@ -355,7 +446,7 @@ export class TelegramBridge {
     // /stop and /cancel
     this.bot.command(["stop", "cancel"], async (ctx) => {
       try {
-        const sessionId = await this.resolveSession();
+        const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
         const active = this.activeTurns.get(sessionId);
         if (active) {
           active.abort();
@@ -364,44 +455,57 @@ export class TelegramBridge {
         await this.dsh.cancelSession(sessionId);
         await ctx.reply(
           `🛑 <b>Stop Command Dispatched</b>\nSession turn <code>${sessionId}</code> has been canceled.`,
-          { parse_mode: "HTML" }
+          { parse_mode: "HTML", message_thread_id: topicId }
         );
       } catch (err: any) {
         await ctx.reply(`❌ Error canceling session: ${escapeHtml(err.message)}`, {
-          parse_mode: "HTML"
+          parse_mode: "HTML",
+          message_thread_id: ctx.message?.message_thread_id
         });
       }
     });
 
     // /rename
     this.bot.command("rename", async (ctx) => {
-      const newTitle = ctx.match?.trim();
-      if (!newTitle) {
+      const rawTitle = ctx.match?.trim();
+      const messageThreadId = ctx.message?.message_thread_id;
+      if (!rawTitle) {
         await ctx.reply(
           "📌 Please specify a new title:\nExample: <code>/rename My Project Name</code>",
-          { parse_mode: "HTML" }
+          { parse_mode: "HTML", message_thread_id: messageThreadId }
         );
         return;
       }
       try {
-        const sessionId = await this.resolveSession();
-        await this.dsh.renameSession(sessionId, newTitle);
+        const cleanTitle = formatTopicTitle(rawTitle);
+        const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
+        await this.dsh.renameSession(sessionId, cleanTitle);
+
+        if (topicId && ctx.chat?.is_forum) {
+          await ctx.api.editForumTopic(ctx.chat.id, topicId, { name: cleanTitle }).catch((err) => {
+            console.warn("[Bridge] editForumTopic failed:", err.message);
+          });
+          this.topicStore.updateTitle(ctx.chat.id, topicId, cleanTitle);
+        }
+
         await ctx.reply(
-          `✏️ <b>Session Renamed</b>\n📌 <b>Title:</b> ${escapeHtml(newTitle)}\n🆔 <code>${sessionId}</code>`,
-          { parse_mode: "HTML" }
+          `✏️ <b>Session & Topic Renamed</b>\n📌 <b>Title:</b> ${escapeHtml(cleanTitle)}\n🆔 <code>${sessionId}</code>`,
+          { parse_mode: "HTML", message_thread_id: topicId }
         );
       } catch (err: any) {
         await ctx.reply(`❌ Error renaming session: ${escapeHtml(err.message)}`, {
-          parse_mode: "HTML"
+          parse_mode: "HTML",
+          message_thread_id: messageThreadId
         });
       }
     });
 
     // /compact
     this.bot.command("compact", async (ctx) => {
-      const sessionId = await this.resolveSession();
+      const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
       const waitMsg = await ctx.reply("🧹 <i>Running session context compaction in DSH...</i>", {
-        parse_mode: "HTML"
+        parse_mode: "HTML",
+        message_thread_id: topicId
       });
       try {
         const res = await this.dsh.executeCommand(sessionId, "/compact");
@@ -435,7 +539,7 @@ export class TelegramBridge {
     // /model
     this.bot.command("model", async (ctx) => {
       try {
-        const sessionId = await this.resolveSession();
+        const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
         const [sessions, catalog] = await Promise.all([
           this.dsh.listSessions(),
           this.dsh.getModelCatalog()
@@ -507,11 +611,13 @@ export class TelegramBridge {
 
         await ctx.reply(text, {
           parse_mode: "HTML",
-          reply_markup: keyboard
+          reply_markup: keyboard,
+          message_thread_id: topicId
         });
       } catch (err: any) {
         await ctx.reply(`❌ Error loading model catalog: ${escapeHtml(err.message)}`, {
-          parse_mode: "HTML"
+          parse_mode: "HTML",
+          message_thread_id: ctx.message?.message_thread_id
         });
       }
     });
@@ -677,7 +783,47 @@ export class TelegramBridge {
     this.bot.on(["message:text", "message:photo", "message:document"], async (ctx) => {
       if (ctx.message.text?.startsWith("/") || ctx.message.caption?.startsWith("/")) return;
 
-      const sessionId = await this.resolveSession();
+      const isForum = Boolean(ctx.chat?.is_forum);
+      let messageThreadId = ctx.message.message_thread_id;
+      let sessionId: string;
+
+      if (isForum && !messageThreadId) {
+        // User sent message outside any topic in a forum chat!
+        // Automatically create a new DSH session + new Telegram forum topic
+        const userText = ctx.message.text?.trim() || ctx.message.caption?.trim() || "New Session";
+        const topicTitle = formatTopicTitle(userText);
+        const created = await this.dsh.createSession();
+        await this.dsh.renameSession(created.sessionId, topicTitle).catch(() => {});
+
+        try {
+          const forumTopic = await ctx.api.createForumTopic(ctx.chat.id, topicTitle);
+          messageThreadId = forumTopic.message_thread_id;
+          this.topicStore.setBinding(ctx.chat.id, messageThreadId, created.sessionId, topicTitle);
+
+          await ctx.reply(
+            `✨ <b>New Session Started</b>\nTopic: <b>${escapeHtml(topicTitle)}</b>\n🆔 <code>${created.sessionId}</code>`,
+            { parse_mode: "HTML" }
+          );
+        } catch (forumErr: any) {
+          console.warn("[Bridge] createForumTopic failed, falling back to root:", forumErr.message);
+        }
+        sessionId = created.sessionId;
+      } else if (messageThreadId) {
+        const resolved = await this.resolveSessionForContext(ctx);
+        sessionId = resolved.sessionId;
+      } else {
+        sessionId = await this.resolveSession();
+      }
+
+      // Helper to build status reply options with topic awareness
+      const buildStatusOptions = (msgId: number) => {
+        const opts: any = {
+          parse_mode: "HTML",
+          reply_parameters: { message_id: msgId }
+        };
+        if (messageThreadId) opts.message_thread_id = messageThreadId;
+        return opts;
+      };
 
       // 0. Media Group (Album) handling
       const mediaGroupId = ctx.message.media_group_id;
@@ -717,16 +863,14 @@ export class TelegramBridge {
         } else {
           const statusMsg = await ctx.reply(
             "⏳ <i>Receiving image album...</i>",
-            {
-              parse_mode: "HTML",
-              reply_parameters: { message_id: ctx.message.message_id }
-            }
+            buildStatusOptions(ctx.message.message_id)
           );
 
           buffer = {
             mediaGroupId,
             ctx,
             sessionId,
+            messageThreadId,
             items: item ? [item] : [],
             caption: ctx.message.caption?.trim(),
             statusMsg,
@@ -749,10 +893,7 @@ export class TelegramBridge {
         );
         const statusMsg = await ctx.reply(
           "⏳ <i>Uploading image to DSH workspace...</i>",
-          {
-            parse_mode: "HTML",
-            reply_parameters: { message_id: ctx.message.message_id }
-          }
+          buildStatusOptions(ctx.message.message_id)
         );
 
         try {
@@ -778,7 +919,7 @@ export class TelegramBridge {
           ];
 
           await this.enqueueSessionTurn(sessionId, () =>
-            this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg)
+            this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg, messageThreadId)
           );
         } catch (err: any) {
           await ctx.api.editMessageText(
@@ -800,10 +941,10 @@ export class TelegramBridge {
         console.log(
           `[Bridge] Received image document from user ${ctx.from?.id} (name: ${doc.file_name})`
         );
-        const statusMsg = await ctx.reply("⏳ <i>Downloading image document to DSH...</i>", {
-          parse_mode: "HTML",
-          reply_parameters: { message_id: ctx.message.message_id }
-        });
+        const statusMsg = await ctx.reply(
+          "⏳ <i>Downloading image document to DSH...</i>",
+          buildStatusOptions(ctx.message.message_id)
+        );
 
         try {
           const file = await ctx.api.getFile(doc.file_id);
@@ -833,7 +974,7 @@ export class TelegramBridge {
           ];
 
           await this.enqueueSessionTurn(sessionId, () =>
-            this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg)
+            this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg, messageThreadId)
           );
         } catch (err: any) {
           await ctx.api.editMessageText(
@@ -855,10 +996,10 @@ export class TelegramBridge {
         console.log(
           `[Bridge] Received document from user ${ctx.from?.id} (name: ${fileName}, mime: ${doc.mime_type})`
         );
-        const statusMsg = await ctx.reply("⏳ <i>Processing text/code document in DSH...</i>", {
-          parse_mode: "HTML",
-          reply_parameters: { message_id: ctx.message.message_id }
-        });
+        const statusMsg = await ctx.reply(
+          `⏳ <i>Downloading file <code>${escapeHtml(fileName)}</code>...</i>`,
+          buildStatusOptions(ctx.message.message_id)
+        );
 
         try {
           const file = await ctx.api.getFile(doc.file_id);
@@ -890,7 +1031,7 @@ export class TelegramBridge {
             : `Attached document (${fileName}):\n\`\`\`\n${maxSnippet}${truncatedNotice}\n\`\`\`\nPlease inspect and analyze this file.`;
 
           await this.enqueueSessionTurn(sessionId, () =>
-            this.handleSessionTurn(ctx, sessionId, prompt, statusMsg)
+            this.handleSessionTurn(ctx, sessionId, prompt, statusMsg, messageThreadId)
           );
         } catch (err: any) {
           await ctx.api.editMessageText(
@@ -909,13 +1050,13 @@ export class TelegramBridge {
         console.log(
           `[Bridge] Received text message: "${userText.slice(0, 50)}" from user ${ctx.from?.id}`
         );
-        const statusMsg = await ctx.reply("⏳ <i>DSH is processing prompt...</i>", {
-          parse_mode: "HTML",
-          reply_parameters: { message_id: ctx.message.message_id }
-        });
+        const statusMsg = await ctx.reply(
+          "⏳ <i>DSH is processing prompt...</i>",
+          buildStatusOptions(ctx.message.message_id)
+        );
 
         await this.enqueueSessionTurn(sessionId, () =>
-          this.handleSessionTurn(ctx, sessionId, userText, statusMsg)
+          this.handleSessionTurn(ctx, sessionId, userText, statusMsg, messageThreadId)
         );
         return;
       }
@@ -977,7 +1118,7 @@ export class TelegramBridge {
       ];
 
       await this.enqueueSessionTurn(sessionId, () =>
-        this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg)
+        this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg, buffer.messageThreadId)
       );
     } catch (err: any) {
       await ctx.api.editMessageText(
@@ -993,7 +1134,8 @@ export class TelegramBridge {
     ctx: any,
     sessionId: string,
     promptContent: string | PromptContentPart[],
-    statusMsg: any
+    statusMsg: any,
+    messageThreadId?: number
   ): Promise<void> {
     return new Promise<void>((resolve) => {
       let currentHtml = "⏳ <i>DSH is thinking...</i>";
@@ -1077,7 +1219,8 @@ export class TelegramBridge {
           },
           onAssistantMessage: async (text, isFinal) => {
             if (isFinal) {
-              await this.deliverAssistantResponse(ctx, statusMsg, text);
+              await this.deliverAssistantResponse(ctx, statusMsg, text, messageThreadId);
+              this.syncTopicTitleIfChanged(sessionId, ctx.chat.id, messageThreadId);
               finish();
             } else {
               const preview = formatToTelegramHtml(text.slice(-300));
@@ -1118,7 +1261,12 @@ export class TelegramBridge {
    * Intelligently delivers the assistant response.
    * If markdown images are detected, sends them as rich Telegram photos with caption and post text!
    */
-  private async deliverAssistantResponse(ctx: any, statusMsg: any, rawText: string) {
+  private async deliverAssistantResponse(
+    ctx: any,
+    statusMsg: any,
+    rawText: string,
+    messageThreadId?: number
+  ) {
     const { textWithoutImages, images } = extractImages(rawText);
 
     // Case 1: Pure text post without images
@@ -1141,10 +1289,17 @@ export class TelegramBridge {
           }
         } else {
           try {
-            await ctx.reply(chunk, { parse_mode: "HTML" });
+            await ctx.api.sendMessage(ctx.chat.id, chunk, {
+              parse_mode: "HTML",
+              message_thread_id: messageThreadId
+            });
           } catch (err: any) {
             console.error("[Reply HTML Error]:", err.message);
-            await ctx.reply(stripHtml(chunk)).catch(() => {});
+            await ctx.api
+              .sendMessage(ctx.chat.id, stripHtml(chunk), {
+                message_thread_id: messageThreadId
+              })
+              .catch(() => {});
           }
         }
       }
@@ -1188,19 +1343,24 @@ export class TelegramBridge {
       if (photoInputs.length === 1) {
         const single = photoInputs[0];
         if (fitsCaption) {
-          await ctx.replyWithPhoto(single.input, {
+          await ctx.api.sendPhoto(ctx.chat.id, single.input, {
             caption: formattedText,
-            parse_mode: "HTML"
+            parse_mode: "HTML",
+            message_thread_id: messageThreadId
           });
         } else {
-          await ctx.replyWithPhoto(single.input, {
+          await ctx.api.sendPhoto(ctx.chat.id, single.input, {
             caption: single.alt ? `🖼 <b>${escapeHtml(single.alt)}</b>` : undefined,
-            parse_mode: "HTML"
+            parse_mode: "HTML",
+            message_thread_id: messageThreadId
           });
           if (formattedText.length > 0) {
             const chunks = chunkHtmlMessage(formattedText);
             for (const chunk of chunks) {
-              await ctx.reply(chunk, { parse_mode: "HTML" });
+              await ctx.api.sendMessage(ctx.chat.id, chunk, {
+                parse_mode: "HTML",
+                message_thread_id: messageThreadId
+              });
             }
           }
         }
@@ -1216,13 +1376,18 @@ export class TelegramBridge {
         parse_mode: idx === 0 && fitsCaption ? ("HTML" as const) : undefined
       }));
 
-      await ctx.api.sendMediaGroup(ctx.chat.id, mediaGroup);
+      await ctx.api.sendMediaGroup(ctx.chat.id, mediaGroup, {
+        message_thread_id: messageThreadId
+      });
 
       // If text exceeds 1024 chars, deliver as subsequent text message
       if (!fitsCaption && formattedText.length > 0) {
         const chunks = chunkHtmlMessage(formattedText);
         for (const chunk of chunks) {
-          await ctx.reply(chunk, { parse_mode: "HTML" });
+          await ctx.api.sendMessage(ctx.chat.id, chunk, {
+            parse_mode: "HTML",
+            message_thread_id: messageThreadId
+          });
         }
       }
 
@@ -1243,13 +1408,13 @@ export class TelegramBridge {
     try {
       await this.bot.api.setMyCommands([
         { command: "start", description: "Overview and status" },
-        { command: "new", description: "Create a new session" },
+        { command: "new", description: "Create a new session / topic" },
         { command: "stats", description: "Session metrics, latency & token cache" },
         { command: "sessions", description: "List and switch sessions" },
         { command: "attach", description: "Attach to active Web GUI session" },
         { command: "model", description: "Select model and reasoning effort" },
         { command: "compact", description: "Compact and summarize session history" },
-        { command: "rename", description: "Rename active session" },
+        { command: "rename", description: "Rename active session and topic" },
         { command: "stop", description: "Abort active turn or tool" }
       ]);
       console.log("[Bridge] Telegram bot commands registered successfully.");

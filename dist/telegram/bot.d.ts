@@ -6,6 +6,7 @@ export declare class TelegramBridge {
     private dsh;
     private currentSessionId;
     private sessionStateFile;
+    private topicStore;
     private mediaGroupBuffers;
     private sessionLocks;
     private processedMessageIds;
@@ -17,6 +18,8 @@ export declare class TelegramBridge {
     private setupPlugins;
     private setupMiddleware;
     private resolveSession;
+    private resolveSessionForContext;
+    private syncTopicTitleIfChanged;
     private setupCommands;
     private enqueueSessionTurn;
     private setupMessageHandler;

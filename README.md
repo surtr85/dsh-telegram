@@ -24,6 +24,10 @@ It allows you to supervise, guide, inspect, and prompt your local DeepSeek Harne
 - 📸 **Bidirectional Multimodal Engine**:
   - **Inbound**: 1-second debounced album grouping (`media_group_id`) bundles photos and images into a single native `PromptContentPart[]` turn.
   - **Outbound**: Automatically detects assistant Markdown images, loads local/remote files, and delivers them as high-resolution native Telegram Photo posts or Media Group albums with HTML captions.
+- 🧵 **Forum Topics & Threaded Sessions**:
+  - Full support for Telegram Forum Supergroups: Each topic corresponds 1:1 to an isolated DSH agent session.
+  - Messages sent outside topics automatically create a new topic and DSH session.
+  - Renaming via `/rename` updates both the DSH session title and the Telegram topic name simultaneously.
 - 📄 **Code & Text Document Ingestion**:
   - Drag-and-drop code files (`.py`, `.ts`, `.json`, `.yaml`, `.log`, `.txt`, `.md`, `.nix`, `.sh`).
   - Binary sniffing protection with truncation safety limits (up to 100K characters) injected directly into agent context.
@@ -50,13 +54,13 @@ It allows you to supervise, guide, inspect, and prompt your local DeepSeek Harne
 | Command | Description |
 | :--- | :--- |
 | `/start` | Overview, connection status, and quick capabilities guide. |
-| `/new` | Spawn a fresh, isolated DSH agent session. |
+| `/new` | Spawn a fresh, isolated DSH agent session (and Forum Topic in forums). |
 | `/stats` | Comprehensive telemetry dashboard: Context Window %, Token Breakdown, TTFT, Speed & Cache Hit Ratio. *(Aliases: `/session`, `/status`)* |
 | `/sessions` | Interactive menu listing recent sessions with 1-tap switching. |
 | `/attach` | Hot-attach to the newest active session opened in the DSH Web GUI. |
 | `/model` | AI Model switcher with dedicated reasoning effort selection buttons. |
 | `/compact` | Trigger history compaction to compress context tokens into a summary. |
-| `/rename <title>` | Rename the title of the active session. |
+| `/rename <title>` | Rename the title of the active session and Telegram topic. |
 | `/stop` / `/cancel` | Immediately cancel and interrupt the active agent turn or running tool. |
 
 ---

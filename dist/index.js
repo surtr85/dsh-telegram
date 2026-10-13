@@ -112,17 +112,17 @@ var require_visit = __commonJS({
     visit.BREAK = BREAK;
     visit.SKIP = SKIP;
     visit.REMOVE = REMOVE;
-    function visit_(key, node, visitor, path3) {
-      const ctrl = callVisitor(key, node, visitor, path3);
+    function visit_(key, node, visitor, path4) {
+      const ctrl = callVisitor(key, node, visitor, path4);
       if (identity.isNode(ctrl) || identity.isPair(ctrl)) {
-        replaceNode(key, path3, ctrl);
-        return visit_(key, ctrl, visitor, path3);
+        replaceNode(key, path4, ctrl);
+        return visit_(key, ctrl, visitor, path4);
       }
       if (typeof ctrl !== "symbol") {
         if (identity.isCollection(node)) {
-          path3 = Object.freeze(path3.concat(node));
+          path4 = Object.freeze(path4.concat(node));
           for (let i = 0; i < node.items.length; ++i) {
-            const ci = visit_(i, node.items[i], visitor, path3);
+            const ci = visit_(i, node.items[i], visitor, path4);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -133,13 +133,13 @@ var require_visit = __commonJS({
             }
           }
         } else if (identity.isPair(node)) {
-          path3 = Object.freeze(path3.concat(node));
-          const ck = visit_("key", node.key, visitor, path3);
+          path4 = Object.freeze(path4.concat(node));
+          const ck = visit_("key", node.key, visitor, path4);
           if (ck === BREAK)
             return BREAK;
           else if (ck === REMOVE)
             node.key = null;
-          const cv = visit_("value", node.value, visitor, path3);
+          const cv = visit_("value", node.value, visitor, path4);
           if (cv === BREAK)
             return BREAK;
           else if (cv === REMOVE)
@@ -160,17 +160,17 @@ var require_visit = __commonJS({
     visitAsync.BREAK = BREAK;
     visitAsync.SKIP = SKIP;
     visitAsync.REMOVE = REMOVE;
-    async function visitAsync_(key, node, visitor, path3) {
-      const ctrl = await callVisitor(key, node, visitor, path3);
+    async function visitAsync_(key, node, visitor, path4) {
+      const ctrl = await callVisitor(key, node, visitor, path4);
       if (identity.isNode(ctrl) || identity.isPair(ctrl)) {
-        replaceNode(key, path3, ctrl);
-        return visitAsync_(key, ctrl, visitor, path3);
+        replaceNode(key, path4, ctrl);
+        return visitAsync_(key, ctrl, visitor, path4);
       }
       if (typeof ctrl !== "symbol") {
         if (identity.isCollection(node)) {
-          path3 = Object.freeze(path3.concat(node));
+          path4 = Object.freeze(path4.concat(node));
           for (let i = 0; i < node.items.length; ++i) {
-            const ci = await visitAsync_(i, node.items[i], visitor, path3);
+            const ci = await visitAsync_(i, node.items[i], visitor, path4);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -181,13 +181,13 @@ var require_visit = __commonJS({
             }
           }
         } else if (identity.isPair(node)) {
-          path3 = Object.freeze(path3.concat(node));
-          const ck = await visitAsync_("key", node.key, visitor, path3);
+          path4 = Object.freeze(path4.concat(node));
+          const ck = await visitAsync_("key", node.key, visitor, path4);
           if (ck === BREAK)
             return BREAK;
           else if (ck === REMOVE)
             node.key = null;
-          const cv = await visitAsync_("value", node.value, visitor, path3);
+          const cv = await visitAsync_("value", node.value, visitor, path4);
           if (cv === BREAK)
             return BREAK;
           else if (cv === REMOVE)
@@ -214,23 +214,23 @@ var require_visit = __commonJS({
       }
       return visitor;
     }
-    function callVisitor(key, node, visitor, path3) {
+    function callVisitor(key, node, visitor, path4) {
       if (typeof visitor === "function")
-        return visitor(key, node, path3);
+        return visitor(key, node, path4);
       if (identity.isMap(node))
-        return visitor.Map?.(key, node, path3);
+        return visitor.Map?.(key, node, path4);
       if (identity.isSeq(node))
-        return visitor.Seq?.(key, node, path3);
+        return visitor.Seq?.(key, node, path4);
       if (identity.isPair(node))
-        return visitor.Pair?.(key, node, path3);
+        return visitor.Pair?.(key, node, path4);
       if (identity.isScalar(node))
-        return visitor.Scalar?.(key, node, path3);
+        return visitor.Scalar?.(key, node, path4);
       if (identity.isAlias(node))
-        return visitor.Alias?.(key, node, path3);
+        return visitor.Alias?.(key, node, path4);
       return void 0;
     }
-    function replaceNode(key, path3, node) {
-      const parent = path3[path3.length - 1];
+    function replaceNode(key, path4, node) {
+      const parent = path4[path4.length - 1];
       if (identity.isCollection(parent)) {
         parent.items[key] = node;
       } else if (identity.isPair(parent)) {
@@ -842,10 +842,10 @@ var require_Collection = __commonJS({
     var createNode = require_createNode();
     var identity = require_identity();
     var Node = require_Node();
-    function collectionFromPath(schema, path3, value) {
+    function collectionFromPath(schema, path4, value) {
       let v2 = value;
-      for (let i = path3.length - 1; i >= 0; --i) {
-        const k = path3[i];
+      for (let i = path4.length - 1; i >= 0; --i) {
+        const k = path4[i];
         if (typeof k === "number" && Number.isInteger(k) && k >= 0) {
           const a3 = [];
           a3[k] = v2;
@@ -864,7 +864,7 @@ var require_Collection = __commonJS({
         sourceObjects: /* @__PURE__ */ new Map()
       });
     }
-    var isEmptyPath = (path3) => path3 == null || typeof path3 === "object" && !!path3[Symbol.iterator]().next().done;
+    var isEmptyPath = (path4) => path4 == null || typeof path4 === "object" && !!path4[Symbol.iterator]().next().done;
     var Collection = class extends Node.NodeBase {
       constructor(type, schema) {
         super(type);
@@ -894,11 +894,11 @@ var require_Collection = __commonJS({
        * be a Pair instance or a `{ key, value }` object, which may not have a key
        * that already exists in the map.
        */
-      addIn(path3, value) {
-        if (isEmptyPath(path3))
+      addIn(path4, value) {
+        if (isEmptyPath(path4))
           this.add(value);
         else {
-          const [key, ...rest] = path3;
+          const [key, ...rest] = path4;
           const node = this.get(key, true);
           if (identity.isCollection(node))
             node.addIn(rest, value);
@@ -912,8 +912,8 @@ var require_Collection = __commonJS({
        * Removes a value from the collection.
        * @returns `true` if the item was found and removed.
        */
-      deleteIn(path3) {
-        const [key, ...rest] = path3;
+      deleteIn(path4) {
+        const [key, ...rest] = path4;
         if (rest.length === 0)
           return this.delete(key);
         const node = this.get(key, true);
@@ -927,8 +927,8 @@ var require_Collection = __commonJS({
        * scalar values from their surrounding node; to disable set `keepScalar` to
        * `true` (collections are always returned intact).
        */
-      getIn(path3, keepScalar) {
-        const [key, ...rest] = path3;
+      getIn(path4, keepScalar) {
+        const [key, ...rest] = path4;
         const node = this.get(key, true);
         if (rest.length === 0)
           return !keepScalar && identity.isScalar(node) ? node.value : node;
@@ -946,8 +946,8 @@ var require_Collection = __commonJS({
       /**
        * Checks if the collection includes a value with the key `key`.
        */
-      hasIn(path3) {
-        const [key, ...rest] = path3;
+      hasIn(path4) {
+        const [key, ...rest] = path4;
         if (rest.length === 0)
           return this.has(key);
         const node = this.get(key, true);
@@ -957,8 +957,8 @@ var require_Collection = __commonJS({
        * Sets a value in this collection. For `!!set`, `value` needs to be a
        * boolean to add/remove the item from the set.
        */
-      setIn(path3, value) {
-        const [key, ...rest] = path3;
+      setIn(path4, value) {
+        const [key, ...rest] = path4;
         if (rest.length === 0) {
           this.set(key, value);
         } else {
@@ -3473,9 +3473,9 @@ var require_Document = __commonJS({
           this.contents.add(value);
       }
       /** Adds a value to the document. */
-      addIn(path3, value) {
+      addIn(path4, value) {
         if (assertCollection(this.contents))
-          this.contents.addIn(path3, value);
+          this.contents.addIn(path4, value);
       }
       /**
        * Create a new `Alias` node, ensuring that the target `node` has the required anchor.
@@ -3550,14 +3550,14 @@ var require_Document = __commonJS({
        * Removes a value from the document.
        * @returns `true` if the item was found and removed.
        */
-      deleteIn(path3) {
-        if (Collection.isEmptyPath(path3)) {
+      deleteIn(path4) {
+        if (Collection.isEmptyPath(path4)) {
           if (this.contents == null)
             return false;
           this.contents = null;
           return true;
         }
-        return assertCollection(this.contents) ? this.contents.deleteIn(path3) : false;
+        return assertCollection(this.contents) ? this.contents.deleteIn(path4) : false;
       }
       /**
        * Returns item at `key`, or `undefined` if not found. By default unwraps
@@ -3572,10 +3572,10 @@ var require_Document = __commonJS({
        * scalar values from their surrounding node; to disable set `keepScalar` to
        * `true` (collections are always returned intact).
        */
-      getIn(path3, keepScalar) {
-        if (Collection.isEmptyPath(path3))
+      getIn(path4, keepScalar) {
+        if (Collection.isEmptyPath(path4))
           return !keepScalar && identity.isScalar(this.contents) ? this.contents.value : this.contents;
-        return identity.isCollection(this.contents) ? this.contents.getIn(path3, keepScalar) : void 0;
+        return identity.isCollection(this.contents) ? this.contents.getIn(path4, keepScalar) : void 0;
       }
       /**
        * Checks if the document includes a value with the key `key`.
@@ -3586,10 +3586,10 @@ var require_Document = __commonJS({
       /**
        * Checks if the document includes a value at `path`.
        */
-      hasIn(path3) {
-        if (Collection.isEmptyPath(path3))
+      hasIn(path4) {
+        if (Collection.isEmptyPath(path4))
           return this.contents !== void 0;
-        return identity.isCollection(this.contents) ? this.contents.hasIn(path3) : false;
+        return identity.isCollection(this.contents) ? this.contents.hasIn(path4) : false;
       }
       /**
        * Sets a value in this document. For `!!set`, `value` needs to be a
@@ -3606,13 +3606,13 @@ var require_Document = __commonJS({
        * Sets a value in this document. For `!!set`, `value` needs to be a
        * boolean to add/remove the item from the set.
        */
-      setIn(path3, value) {
-        if (Collection.isEmptyPath(path3)) {
+      setIn(path4, value) {
+        if (Collection.isEmptyPath(path4)) {
           this.contents = value;
         } else if (this.contents == null) {
-          this.contents = Collection.collectionFromPath(this.schema, Array.from(path3), value);
+          this.contents = Collection.collectionFromPath(this.schema, Array.from(path4), value);
         } else if (assertCollection(this.contents)) {
-          this.contents.setIn(path3, value);
+          this.contents.setIn(path4, value);
         }
       }
       /**
@@ -5573,9 +5573,9 @@ var require_cst_visit = __commonJS({
     visit.BREAK = BREAK;
     visit.SKIP = SKIP;
     visit.REMOVE = REMOVE;
-    visit.itemAtPath = (cst, path3) => {
+    visit.itemAtPath = (cst, path4) => {
       let item = cst;
-      for (const [field, index] of path3) {
+      for (const [field, index] of path4) {
         const tok = item?.[field];
         if (tok && "items" in tok) {
           item = tok.items[index];
@@ -5584,23 +5584,23 @@ var require_cst_visit = __commonJS({
       }
       return item;
     };
-    visit.parentCollection = (cst, path3) => {
-      const parent = visit.itemAtPath(cst, path3.slice(0, -1));
-      const field = path3[path3.length - 1][0];
+    visit.parentCollection = (cst, path4) => {
+      const parent = visit.itemAtPath(cst, path4.slice(0, -1));
+      const field = path4[path4.length - 1][0];
       const coll = parent?.[field];
       if (coll && "items" in coll)
         return coll;
       throw new Error("Parent collection not found");
     };
-    function _visit(path3, item, visitor) {
-      let ctrl = visitor(item, path3);
+    function _visit(path4, item, visitor) {
+      let ctrl = visitor(item, path4);
       if (typeof ctrl === "symbol")
         return ctrl;
       for (const field of ["key", "value"]) {
         const token = item[field];
         if (token && "items" in token) {
           for (let i = 0; i < token.items.length; ++i) {
-            const ci = _visit(Object.freeze(path3.concat([[field, i]])), token.items[i], visitor);
+            const ci = _visit(Object.freeze(path4.concat([[field, i]])), token.items[i], visitor);
             if (typeof ci === "number")
               i = ci - 1;
             else if (ci === BREAK)
@@ -5611,10 +5611,10 @@ var require_cst_visit = __commonJS({
             }
           }
           if (typeof ctrl === "function" && field === "key")
-            ctrl = ctrl(item, path3);
+            ctrl = ctrl(item, path4);
         }
       }
-      return typeof ctrl === "function" ? ctrl(item, path3) : ctrl;
+      return typeof ctrl === "function" ? ctrl(item, path4) : ctrl;
     }
     exports2.visit = visit;
   }
@@ -6916,14 +6916,14 @@ var require_parser = __commonJS({
             case "scalar":
             case "single-quoted-scalar":
             case "double-quoted-scalar": {
-              const fs4 = this.flowScalar(this.type);
+              const fs5 = this.flowScalar(this.type);
               if (atNextItem || it2.value) {
-                map.items.push({ start, key: fs4, sep: [] });
+                map.items.push({ start, key: fs5, sep: [] });
                 this.onKeyLine = true;
               } else if (it2.sep) {
-                this.stack.push(fs4);
+                this.stack.push(fs5);
               } else {
-                Object.assign(it2, { key: fs4, sep: [] });
+                Object.assign(it2, { key: fs5, sep: [] });
                 this.onKeyLine = true;
               }
               return;
@@ -7051,13 +7051,13 @@ var require_parser = __commonJS({
             case "scalar":
             case "single-quoted-scalar":
             case "double-quoted-scalar": {
-              const fs4 = this.flowScalar(this.type);
+              const fs5 = this.flowScalar(this.type);
               if (!it2 || it2.value)
-                fc.items.push({ start: [], key: fs4, sep: [] });
+                fc.items.push({ start: [], key: fs5, sep: [] });
               else if (it2.sep)
-                this.stack.push(fs4);
+                this.stack.push(fs5);
               else
-                Object.assign(it2, { key: fs4, sep: [] });
+                Object.assign(it2, { key: fs5, sep: [] });
               return;
             }
             case "flow-map-end":
@@ -16250,14 +16250,14 @@ var require_url_state_machine = __commonJS({
       return url.replace(/\u0009|\u000A|\u000D/g, "");
     }
     function shortenPath(url) {
-      const path3 = url.path;
-      if (path3.length === 0) {
+      const path4 = url.path;
+      if (path4.length === 0) {
         return;
       }
-      if (url.scheme === "file" && path3.length === 1 && isNormalizedWindowsDriveLetter(path3[0])) {
+      if (url.scheme === "file" && path4.length === 1 && isNormalizedWindowsDriveLetter(path4[0])) {
         return;
       }
-      path3.pop();
+      path4.pop();
     }
     function includesCredentials(url) {
       return url.username !== "" || url.password !== "";
@@ -28748,8 +28748,8 @@ var DshClient = class {
 var import_grammy = __toESM(require_mod2(), 1);
 var import_auto_retry = __toESM(require_mod3(), 1);
 var import_transformer_throttler = __toESM(require_mod4(), 1);
-import fs3 from "fs";
-import path2 from "path";
+import fs4 from "fs";
+import path3 from "path";
 
 // node_modules/.pnpm/marked@18.1.1/node_modules/marked/lib/marked.esm.js
 function B() {
@@ -30136,6 +30136,124 @@ function chunkHtmlMessage(html, maxLen = 4e3) {
   return chunks;
 }
 
+// src/telegram/topic-store.ts
+import fs3 from "fs";
+import path2 from "path";
+var TopicStore = class {
+  filePath;
+  bindings = /* @__PURE__ */ new Map();
+  // key: `${chatId}:${topicId}`
+  constructor(filePath) {
+    this.filePath = filePath;
+    this.load();
+  }
+  getKey(chatId, topicId) {
+    return `${chatId}:${topicId}`;
+  }
+  getBinding(chatId, topicId) {
+    return this.bindings.get(this.getKey(chatId, topicId));
+  }
+  getBindingBySession(sessionId) {
+    for (const binding of this.bindings.values()) {
+      if (binding.sessionId === sessionId) {
+        return binding;
+      }
+    }
+    return void 0;
+  }
+  setBinding(chatId, topicId, sessionId, title = "New Session") {
+    const key = this.getKey(chatId, topicId);
+    const existing = this.bindings.get(key);
+    const now = Date.now();
+    const binding = {
+      chatId,
+      topicId,
+      sessionId,
+      title,
+      createdAt: existing ? existing.createdAt : now,
+      updatedAt: now
+    };
+    this.bindings.set(key, binding);
+    this.save();
+    return binding;
+  }
+  updateTitle(chatId, topicId, title) {
+    const key = this.getKey(chatId, topicId);
+    const existing = this.bindings.get(key);
+    if (!existing) return false;
+    existing.title = title;
+    existing.updatedAt = Date.now();
+    this.save();
+    return true;
+  }
+  updateTitleBySession(sessionId, title) {
+    const existing = this.getBindingBySession(sessionId);
+    if (!existing) return false;
+    existing.title = title;
+    existing.updatedAt = Date.now();
+    this.save();
+    return true;
+  }
+  deleteBinding(chatId, topicId) {
+    const key = this.getKey(chatId, topicId);
+    const deleted = this.bindings.delete(key);
+    if (deleted) {
+      this.save();
+    }
+    return deleted;
+  }
+  listBindings(chatId) {
+    const list = Array.from(this.bindings.values());
+    if (chatId !== void 0) {
+      return list.filter((b) => b.chatId === chatId);
+    }
+    return list;
+  }
+  load() {
+    try {
+      if (fs3.existsSync(this.filePath)) {
+        const raw = fs3.readFileSync(this.filePath, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          this.bindings.clear();
+          for (const item of parsed) {
+            if (item.chatId && item.topicId && item.sessionId) {
+              this.bindings.set(this.getKey(item.chatId, item.topicId), item);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[TopicStore] Failed to load topics from ${this.filePath}:`, err.message);
+    }
+  }
+  save() {
+    try {
+      const dir = path2.dirname(this.filePath);
+      if (!fs3.existsSync(dir)) {
+        fs3.mkdirSync(dir, { recursive: true });
+      }
+      const data = Array.from(this.bindings.values());
+      fs3.writeFileSync(this.filePath, JSON.stringify(data, null, 2), "utf-8");
+    } catch (err) {
+      console.error(`[TopicStore] Failed to save topics to ${this.filePath}:`, err.message);
+    }
+  }
+};
+
+// src/telegram/topic-utils.ts
+function formatTopicTitle(input, fallback = "New Session") {
+  if (!input) return fallback;
+  const cleaned = input.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) return fallback;
+  const MAX_TOPIC_LENGTH = 64;
+  if (cleaned.length <= MAX_TOPIC_LENGTH) {
+    return cleaned;
+  }
+  const truncated = cleaned.slice(0, MAX_TOPIC_LENGTH - 3).trim();
+  return `${truncated}...`;
+}
+
 // src/telegram/bot.ts
 function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -30164,6 +30282,7 @@ var TelegramBridge = class {
   dsh;
   currentSessionId = null;
   sessionStateFile;
+  topicStore;
   mediaGroupBuffers = /* @__PURE__ */ new Map();
   sessionLocks = /* @__PURE__ */ new Map();
   processedMessageIds = /* @__PURE__ */ new Set();
@@ -30173,7 +30292,8 @@ var TelegramBridge = class {
     this.config = config;
     this.dsh = dshClient;
     this.bot = new import_grammy.Bot(config.telegramToken);
-    this.sessionStateFile = path2.join(config.defaultCwd, ".dsh-session");
+    this.sessionStateFile = path3.join(config.defaultCwd, ".dsh-session");
+    this.topicStore = new TopicStore(path3.join(config.defaultCwd, ".dsh-topics.json"));
     this.loadPersistedSession();
     this.setupPlugins();
     this.setupMiddleware();
@@ -30182,8 +30302,8 @@ var TelegramBridge = class {
   }
   loadPersistedSession() {
     try {
-      if (fs3.existsSync(this.sessionStateFile)) {
-        const id = fs3.readFileSync(this.sessionStateFile, "utf8").trim();
+      if (fs4.existsSync(this.sessionStateFile)) {
+        const id = fs4.readFileSync(this.sessionStateFile, "utf8").trim();
         if (id) {
           this.currentSessionId = id;
           console.log(`[Bridge] Restored session from file: ${id}`);
@@ -30195,7 +30315,7 @@ var TelegramBridge = class {
   persistSession(sessionId) {
     this.currentSessionId = sessionId;
     try {
-      fs3.writeFileSync(this.sessionStateFile, sessionId, "utf8");
+      fs4.writeFileSync(this.sessionStateFile, sessionId, "utf8");
     } catch {
     }
   }
@@ -30237,11 +30357,45 @@ var TelegramBridge = class {
     this.persistSession(created.sessionId);
     return created.sessionId;
   }
+  async resolveSessionForContext(ctx) {
+    const messageThreadId = ctx.message?.message_thread_id || ctx.callbackQuery?.message?.message_thread_id;
+    if (messageThreadId) {
+      const binding = this.topicStore.getBinding(ctx.chat.id, messageThreadId);
+      if (binding) {
+        return { sessionId: binding.sessionId, topicId: messageThreadId };
+      }
+      const created = await this.dsh.createSession();
+      const title = formatTopicTitle(ctx.message?.text || `Topic ${messageThreadId}`);
+      this.topicStore.setBinding(ctx.chat.id, messageThreadId, created.sessionId, title);
+      await this.dsh.renameSession(created.sessionId, title).catch(() => {
+      });
+      return { sessionId: created.sessionId, topicId: messageThreadId };
+    }
+    const sessionId = await this.resolveSession();
+    return { sessionId };
+  }
+  async syncTopicTitleIfChanged(sessionId, chatId, topicId) {
+    if (!topicId) return;
+    try {
+      const proj = await this.dsh.getSessionProjections(sessionId);
+      const dshTitle = proj?.values?.title;
+      if (dshTitle) {
+        const binding = this.topicStore.getBinding(chatId, topicId);
+        if (binding && binding.title !== dshTitle) {
+          const cleanTitle = formatTopicTitle(dshTitle);
+          await this.bot.api.editForumTopic(chatId, topicId, { name: cleanTitle }).catch(() => {
+          });
+          this.topicStore.updateTitle(chatId, topicId, cleanTitle);
+        }
+      }
+    } catch {
+    }
+  }
   setupCommands() {
     this.bot.command("start", async (ctx) => {
       console.log(`[Bridge] Received /start from user ${ctx.from?.id}`);
       try {
-        const sessionId = await this.resolveSession();
+        const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
         const sessions = await this.dsh.listSessions();
         const current = sessions.find((s) => s.sessionId === sessionId);
         const title = current?.projections?.values?.title || "Active DSH Workspace";
@@ -30254,41 +30408,90 @@ var TelegramBridge = class {
 
 <b>Commands & Capabilities:</b>
 \u2022 \u{1F4AC} Send text prompts, photos, or code files (.ts, .py, .json, ...)
+\u2022 \u{1F9F5} <b>Forum Topics:</b> Each topic routes to an isolated DSH session
 \u2022 \u{1F5BC} Receive rich media, code blocks, and formatted albums
-\u2022 <code>/new</code> - Start a brand new session
+\u2022 <code>/new</code> - Start a brand new session / topic
 \u2022 <code>/stats</code> - Comprehensive session statistics & token metrics
 \u2022 <code>/sessions</code> - Browse & switch between recent sessions
 \u2022 <code>/attach</code> - Attach to active Web GUI session
 \u2022 <code>/model</code> - Select model & reasoning effort
 \u2022 <code>/compact</code> - Compact and summarize session history
-\u2022 <code>/rename &lt;title&gt;</code> - Rename current session
+\u2022 <code>/rename &lt;title&gt;</code> - Rename current session & topic
 \u2022 <code>/stop</code> - Abort running turn or tool`;
-        await ctx.reply(text, { parse_mode: "HTML" });
+        await ctx.reply(text, { parse_mode: "HTML", message_thread_id: topicId });
       } catch (err) {
-        await ctx.reply(`\u274C Error initializing session: ${err.message}`);
+        await ctx.reply(`\u274C Error initializing session: ${err.message}`, {
+          message_thread_id: ctx.message?.message_thread_id
+        });
       }
     });
     this.bot.command("new", async (ctx) => {
       try {
-        const waitMsg = await ctx.reply("\u2728 Creating new DSH session...");
-        const created = await this.dsh.createSession();
-        this.persistSession(created.sessionId);
-        await ctx.api.editMessageText(
-          ctx.chat.id,
-          waitMsg.message_id,
-          `\u2728 <b>New DSH Session Started</b>
+        const isForum = Boolean(ctx.chat?.is_forum);
+        if (isForum) {
+          const title = `Session ${(/* @__PURE__ */ new Date()).toISOString().slice(11, 19)}`;
+          const waitMsg = await ctx.reply("\u2728 Creating new DSH session and forum topic...", {
+            message_thread_id: ctx.message?.message_thread_id
+          });
+          const created = await this.dsh.createSession();
+          await this.dsh.renameSession(created.sessionId, title).catch(() => {
+          });
+          try {
+            const forumTopic = await ctx.api.createForumTopic(ctx.chat.id, title);
+            this.topicStore.setBinding(ctx.chat.id, forumTopic.message_thread_id, created.sessionId, title);
+            await ctx.api.editMessageText(
+              ctx.chat.id,
+              waitMsg.message_id,
+              `\u2728 <b>New DSH Session Started</b>
+Topic: <b>${escapeHtml(title)}</b>
+\u{1F194} <code>${created.sessionId}</code>`,
+              { parse_mode: "HTML" }
+            );
+            await ctx.api.sendMessage(
+              ctx.chat.id,
+              `\u2728 <b>Session Initialized</b>
+\u{1F194} <code>${created.sessionId}</code>
+
+All messages in this topic route to this session.`,
+              {
+                parse_mode: "HTML",
+                message_thread_id: forumTopic.message_thread_id
+              }
+            );
+          } catch (forumErr) {
+            console.warn("[Bridge] createForumTopic failed, falling back:", forumErr.message);
+            this.persistSession(created.sessionId);
+            await ctx.api.editMessageText(
+              ctx.chat.id,
+              waitMsg.message_id,
+              `\u2728 <b>New DSH Session Started</b>
+\u{1F194} <code>${created.sessionId}</code>`,
+              { parse_mode: "HTML" }
+            );
+          }
+        } else {
+          const waitMsg = await ctx.reply("\u2728 Creating new DSH session...");
+          const created = await this.dsh.createSession();
+          this.persistSession(created.sessionId);
+          await ctx.api.editMessageText(
+            ctx.chat.id,
+            waitMsg.message_id,
+            `\u2728 <b>New DSH Session Started</b>
 \u{1F194} <code>${created.sessionId}</code>
 
 All subsequent messages will execute inside this session.`,
-          { parse_mode: "HTML" }
-        );
+            { parse_mode: "HTML" }
+          );
+        }
       } catch (err) {
-        await ctx.reply(`\u274C Failed to create session: ${err.message}`);
+        await ctx.reply(`\u274C Failed to create session: ${err.message}`, {
+          message_thread_id: ctx.message?.message_thread_id
+        });
       }
     });
     this.bot.command(["stats", "session", "status"], async (ctx) => {
       try {
-        const sessionId = await this.resolveSession();
+        const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
         const [sessions, projections] = await Promise.all([
           this.dsh.listSessions(),
           this.dsh.getSessionProjections(sessionId)
@@ -30296,7 +30499,8 @@ All subsequent messages will execute inside this session.`,
         const current = sessions.find((s) => s.sessionId === sessionId);
         if (!current) {
           await ctx.reply(`Session <code>${sessionId}</code> not found in DSH catalog.`, {
-            parse_mode: "HTML"
+            parse_mode: "HTML",
+            message_thread_id: topicId
           });
           return;
         }
@@ -30352,9 +30556,11 @@ All subsequent messages will execute inside this session.`,
 \u251C \u{1F4E5} <b>Uncached Input:</b> ${uncached.toLocaleString()} tok
 \u251C \u{1F4BE} <b>Cached Input:</b> ${cached.toLocaleString()} tok
 \u2514 \u{1F4E4} <b>Output:</b> ${output.toLocaleString()} tok`;
-        await ctx.reply(info, { parse_mode: "HTML" });
+        await ctx.reply(info, { parse_mode: "HTML", message_thread_id: topicId });
       } catch (err) {
-        await ctx.reply(`\u274C Error retrieving session statistics: ${err.message}`);
+        await ctx.reply(`\u274C Error retrieving session statistics: ${err.message}`, {
+          message_thread_id: ctx.message?.message_thread_id
+        });
       }
     });
     this.bot.command("attach", async (ctx) => {
@@ -30423,7 +30629,7 @@ Subsequent messages will route here.`,
     });
     this.bot.command(["stop", "cancel"], async (ctx) => {
       try {
-        const sessionId = await this.resolveSession();
+        const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
         const active = this.activeTurns.get(sessionId);
         if (active) {
           active.abort();
@@ -30433,42 +30639,53 @@ Subsequent messages will route here.`,
         await ctx.reply(
           `\u{1F6D1} <b>Stop Command Dispatched</b>
 Session turn <code>${sessionId}</code> has been canceled.`,
-          { parse_mode: "HTML" }
+          { parse_mode: "HTML", message_thread_id: topicId }
         );
       } catch (err) {
         await ctx.reply(`\u274C Error canceling session: ${escapeHtml(err.message)}`, {
-          parse_mode: "HTML"
+          parse_mode: "HTML",
+          message_thread_id: ctx.message?.message_thread_id
         });
       }
     });
     this.bot.command("rename", async (ctx) => {
-      const newTitle = ctx.match?.trim();
-      if (!newTitle) {
+      const rawTitle = ctx.match?.trim();
+      const messageThreadId = ctx.message?.message_thread_id;
+      if (!rawTitle) {
         await ctx.reply(
           "\u{1F4CC} Please specify a new title:\nExample: <code>/rename My Project Name</code>",
-          { parse_mode: "HTML" }
+          { parse_mode: "HTML", message_thread_id: messageThreadId }
         );
         return;
       }
       try {
-        const sessionId = await this.resolveSession();
-        await this.dsh.renameSession(sessionId, newTitle);
+        const cleanTitle = formatTopicTitle(rawTitle);
+        const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
+        await this.dsh.renameSession(sessionId, cleanTitle);
+        if (topicId && ctx.chat?.is_forum) {
+          await ctx.api.editForumTopic(ctx.chat.id, topicId, { name: cleanTitle }).catch((err) => {
+            console.warn("[Bridge] editForumTopic failed:", err.message);
+          });
+          this.topicStore.updateTitle(ctx.chat.id, topicId, cleanTitle);
+        }
         await ctx.reply(
-          `\u270F\uFE0F <b>Session Renamed</b>
-\u{1F4CC} <b>Title:</b> ${escapeHtml(newTitle)}
+          `\u270F\uFE0F <b>Session & Topic Renamed</b>
+\u{1F4CC} <b>Title:</b> ${escapeHtml(cleanTitle)}
 \u{1F194} <code>${sessionId}</code>`,
-          { parse_mode: "HTML" }
+          { parse_mode: "HTML", message_thread_id: topicId }
         );
       } catch (err) {
         await ctx.reply(`\u274C Error renaming session: ${escapeHtml(err.message)}`, {
-          parse_mode: "HTML"
+          parse_mode: "HTML",
+          message_thread_id: messageThreadId
         });
       }
     });
     this.bot.command("compact", async (ctx) => {
-      const sessionId = await this.resolveSession();
+      const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
       const waitMsg = await ctx.reply("\u{1F9F9} <i>Running session context compaction in DSH...</i>", {
-        parse_mode: "HTML"
+        parse_mode: "HTML",
+        message_thread_id: topicId
       });
       try {
         const res = await this.dsh.executeCommand(sessionId, "/compact");
@@ -30504,7 +30721,7 @@ ${escapeHtml(result.text)}`,
     });
     this.bot.command("model", async (ctx) => {
       try {
-        const sessionId = await this.resolveSession();
+        const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
         const [sessions, catalog] = await Promise.all([
           this.dsh.listSessions(),
           this.dsh.getModelCatalog()
@@ -30569,11 +30786,13 @@ ${escapeHtml(result.text)}`,
         }
         await ctx.reply(text, {
           parse_mode: "HTML",
-          reply_markup: keyboard
+          reply_markup: keyboard,
+          message_thread_id: topicId
         });
       } catch (err) {
         await ctx.reply(`\u274C Error loading model catalog: ${escapeHtml(err.message)}`, {
-          parse_mode: "HTML"
+          parse_mode: "HTML",
+          message_thread_id: ctx.message?.message_thread_id
         });
       }
     });
@@ -30718,7 +30937,43 @@ ${escapeHtml(result.text)}`,
   setupMessageHandler() {
     this.bot.on(["message:text", "message:photo", "message:document"], async (ctx) => {
       if (ctx.message.text?.startsWith("/") || ctx.message.caption?.startsWith("/")) return;
-      const sessionId = await this.resolveSession();
+      const isForum = Boolean(ctx.chat?.is_forum);
+      let messageThreadId = ctx.message.message_thread_id;
+      let sessionId;
+      if (isForum && !messageThreadId) {
+        const userText = ctx.message.text?.trim() || ctx.message.caption?.trim() || "New Session";
+        const topicTitle = formatTopicTitle(userText);
+        const created = await this.dsh.createSession();
+        await this.dsh.renameSession(created.sessionId, topicTitle).catch(() => {
+        });
+        try {
+          const forumTopic = await ctx.api.createForumTopic(ctx.chat.id, topicTitle);
+          messageThreadId = forumTopic.message_thread_id;
+          this.topicStore.setBinding(ctx.chat.id, messageThreadId, created.sessionId, topicTitle);
+          await ctx.reply(
+            `\u2728 <b>New Session Started</b>
+Topic: <b>${escapeHtml(topicTitle)}</b>
+\u{1F194} <code>${created.sessionId}</code>`,
+            { parse_mode: "HTML" }
+          );
+        } catch (forumErr) {
+          console.warn("[Bridge] createForumTopic failed, falling back to root:", forumErr.message);
+        }
+        sessionId = created.sessionId;
+      } else if (messageThreadId) {
+        const resolved = await this.resolveSessionForContext(ctx);
+        sessionId = resolved.sessionId;
+      } else {
+        sessionId = await this.resolveSession();
+      }
+      const buildStatusOptions = (msgId) => {
+        const opts = {
+          parse_mode: "HTML",
+          reply_parameters: { message_id: msgId }
+        };
+        if (messageThreadId) opts.message_thread_id = messageThreadId;
+        return opts;
+      };
       const mediaGroupId = ctx.message.media_group_id;
       if (mediaGroupId && (ctx.message.photo || ctx.message.document && ctx.message.document.mime_type?.startsWith("image/"))) {
         let item = null;
@@ -30752,15 +31007,13 @@ ${escapeHtml(result.text)}`,
         } else {
           const statusMsg = await ctx.reply(
             "\u23F3 <i>Receiving image album...</i>",
-            {
-              parse_mode: "HTML",
-              reply_parameters: { message_id: ctx.message.message_id }
-            }
+            buildStatusOptions(ctx.message.message_id)
           );
           buffer = {
             mediaGroupId,
             ctx,
             sessionId,
+            messageThreadId,
             items: item ? [item] : [],
             caption: ctx.message.caption?.trim(),
             statusMsg,
@@ -30779,10 +31032,7 @@ ${escapeHtml(result.text)}`,
         );
         const statusMsg = await ctx.reply(
           "\u23F3 <i>Uploading image to DSH workspace...</i>",
-          {
-            parse_mode: "HTML",
-            reply_parameters: { message_id: ctx.message.message_id }
-          }
+          buildStatusOptions(ctx.message.message_id)
         );
         try {
           const file = await ctx.api.getFile(bestPhoto.file_id);
@@ -30806,7 +31056,7 @@ ${escapeHtml(result.text)}`,
           ];
           await this.enqueueSessionTurn(
             sessionId,
-            () => this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg)
+            () => this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg, messageThreadId)
           );
         } catch (err) {
           await ctx.api.editMessageText(
@@ -30824,10 +31074,10 @@ ${escapeHtml(result.text)}`,
         console.log(
           `[Bridge] Received image document from user ${ctx.from?.id} (name: ${doc.file_name})`
         );
-        const statusMsg = await ctx.reply("\u23F3 <i>Downloading image document to DSH...</i>", {
-          parse_mode: "HTML",
-          reply_parameters: { message_id: ctx.message.message_id }
-        });
+        const statusMsg = await ctx.reply(
+          "\u23F3 <i>Downloading image document to DSH...</i>",
+          buildStatusOptions(ctx.message.message_id)
+        );
         try {
           const file = await ctx.api.getFile(doc.file_id);
           if (!file.file_path) throw new Error("Could not retrieve file path from Telegram");
@@ -30854,7 +31104,7 @@ ${escapeHtml(result.text)}`,
           ];
           await this.enqueueSessionTurn(
             sessionId,
-            () => this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg)
+            () => this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg, messageThreadId)
           );
         } catch (err) {
           await ctx.api.editMessageText(
@@ -30873,10 +31123,10 @@ ${escapeHtml(result.text)}`,
         console.log(
           `[Bridge] Received document from user ${ctx.from?.id} (name: ${fileName}, mime: ${doc.mime_type})`
         );
-        const statusMsg = await ctx.reply("\u23F3 <i>Processing text/code document in DSH...</i>", {
-          parse_mode: "HTML",
-          reply_parameters: { message_id: ctx.message.message_id }
-        });
+        const statusMsg = await ctx.reply(
+          `\u23F3 <i>Downloading file <code>${escapeHtml(fileName)}</code>...</i>`,
+          buildStatusOptions(ctx.message.message_id)
+        );
         try {
           const file = await ctx.api.getFile(doc.file_id);
           if (!file.file_path) throw new Error("Could not retrieve file path from Telegram");
@@ -30910,7 +31160,7 @@ ${maxSnippet}${truncatedNotice}
 Please inspect and analyze this file.`;
           await this.enqueueSessionTurn(
             sessionId,
-            () => this.handleSessionTurn(ctx, sessionId, prompt, statusMsg)
+            () => this.handleSessionTurn(ctx, sessionId, prompt, statusMsg, messageThreadId)
           );
         } catch (err) {
           await ctx.api.editMessageText(
@@ -30927,13 +31177,13 @@ Please inspect and analyze this file.`;
         console.log(
           `[Bridge] Received text message: "${userText.slice(0, 50)}" from user ${ctx.from?.id}`
         );
-        const statusMsg = await ctx.reply("\u23F3 <i>DSH is processing prompt...</i>", {
-          parse_mode: "HTML",
-          reply_parameters: { message_id: ctx.message.message_id }
-        });
+        const statusMsg = await ctx.reply(
+          "\u23F3 <i>DSH is processing prompt...</i>",
+          buildStatusOptions(ctx.message.message_id)
+        );
         await this.enqueueSessionTurn(
           sessionId,
-          () => this.handleSessionTurn(ctx, sessionId, userText, statusMsg)
+          () => this.handleSessionTurn(ctx, sessionId, userText, statusMsg, messageThreadId)
         );
         return;
       }
@@ -30987,7 +31237,7 @@ Please inspect and analyze this file.`;
       ];
       await this.enqueueSessionTurn(
         sessionId,
-        () => this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg)
+        () => this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg, buffer.messageThreadId)
       );
     } catch (err) {
       await ctx.api.editMessageText(
@@ -30998,7 +31248,7 @@ Please inspect and analyze this file.`;
       );
     }
   }
-  handleSessionTurn(ctx, sessionId, promptContent, statusMsg) {
+  handleSessionTurn(ctx, sessionId, promptContent, statusMsg, messageThreadId) {
     return new Promise((resolve) => {
       let currentHtml = "\u23F3 <i>DSH is thinking...</i>";
       let lastEditedHtml = currentHtml;
@@ -31075,7 +31325,8 @@ Please inspect and analyze this file.`;
           },
           onAssistantMessage: async (text, isFinal) => {
             if (isFinal) {
-              await this.deliverAssistantResponse(ctx, statusMsg, text);
+              await this.deliverAssistantResponse(ctx, statusMsg, text, messageThreadId);
+              this.syncTopicTitleIfChanged(sessionId, ctx.chat.id, messageThreadId);
               finish();
             } else {
               const preview = formatToTelegramHtml(text.slice(-300));
@@ -31115,7 +31366,7 @@ ${preview}`);
    * Intelligently delivers the assistant response.
    * If markdown images are detected, sends them as rich Telegram photos with caption and post text!
    */
-  async deliverAssistantResponse(ctx, statusMsg, rawText) {
+  async deliverAssistantResponse(ctx, statusMsg, rawText, messageThreadId) {
     const { textWithoutImages, images } = extractImages(rawText);
     if (images.length === 0) {
       const formattedHtml = formatToTelegramHtml(rawText);
@@ -31134,10 +31385,15 @@ ${preview}`);
           }
         } else {
           try {
-            await ctx.reply(chunk, { parse_mode: "HTML" });
+            await ctx.api.sendMessage(ctx.chat.id, chunk, {
+              parse_mode: "HTML",
+              message_thread_id: messageThreadId
+            });
           } catch (err) {
             console.error("[Reply HTML Error]:", err.message);
-            await ctx.reply(stripHtml(chunk)).catch(() => {
+            await ctx.api.sendMessage(ctx.chat.id, stripHtml(chunk), {
+              message_thread_id: messageThreadId
+            }).catch(() => {
             });
           }
         }
@@ -31154,10 +31410,10 @@ ${preview}`);
           photoInput = img.source;
         } else {
           let resolved = img.source;
-          if (!path2.isAbsolute(resolved)) {
-            resolved = path2.resolve(this.config.defaultCwd, resolved);
+          if (!path3.isAbsolute(resolved)) {
+            resolved = path3.resolve(this.config.defaultCwd, resolved);
           }
-          if (fs3.existsSync(resolved)) {
+          if (fs4.existsSync(resolved)) {
             photoInput = new import_grammy.InputFile(resolved);
           }
         }
@@ -31174,19 +31430,24 @@ ${preview}`);
       if (photoInputs.length === 1) {
         const single = photoInputs[0];
         if (fitsCaption) {
-          await ctx.replyWithPhoto(single.input, {
+          await ctx.api.sendPhoto(ctx.chat.id, single.input, {
             caption: formattedText,
-            parse_mode: "HTML"
+            parse_mode: "HTML",
+            message_thread_id: messageThreadId
           });
         } else {
-          await ctx.replyWithPhoto(single.input, {
+          await ctx.api.sendPhoto(ctx.chat.id, single.input, {
             caption: single.alt ? `\u{1F5BC} <b>${escapeHtml(single.alt)}</b>` : void 0,
-            parse_mode: "HTML"
+            parse_mode: "HTML",
+            message_thread_id: messageThreadId
           });
           if (formattedText.length > 0) {
             const chunks = chunkHtmlMessage(formattedText);
             for (const chunk of chunks) {
-              await ctx.reply(chunk, { parse_mode: "HTML" });
+              await ctx.api.sendMessage(ctx.chat.id, chunk, {
+                parse_mode: "HTML",
+                message_thread_id: messageThreadId
+              });
             }
           }
         }
@@ -31200,11 +31461,16 @@ ${preview}`);
         caption: idx === 0 && fitsCaption ? formattedText : void 0,
         parse_mode: idx === 0 && fitsCaption ? "HTML" : void 0
       }));
-      await ctx.api.sendMediaGroup(ctx.chat.id, mediaGroup);
+      await ctx.api.sendMediaGroup(ctx.chat.id, mediaGroup, {
+        message_thread_id: messageThreadId
+      });
       if (!fitsCaption && formattedText.length > 0) {
         const chunks = chunkHtmlMessage(formattedText);
         for (const chunk of chunks) {
-          await ctx.reply(chunk, { parse_mode: "HTML" });
+          await ctx.api.sendMessage(ctx.chat.id, chunk, {
+            parse_mode: "HTML",
+            message_thread_id: messageThreadId
+          });
         }
       }
       await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {
@@ -31222,13 +31488,13 @@ ${preview}`);
     try {
       await this.bot.api.setMyCommands([
         { command: "start", description: "Overview and status" },
-        { command: "new", description: "Create a new session" },
+        { command: "new", description: "Create a new session / topic" },
         { command: "stats", description: "Session metrics, latency & token cache" },
         { command: "sessions", description: "List and switch sessions" },
         { command: "attach", description: "Attach to active Web GUI session" },
         { command: "model", description: "Select model and reasoning effort" },
         { command: "compact", description: "Compact and summarize session history" },
-        { command: "rename", description: "Rename active session" },
+        { command: "rename", description: "Rename active session and topic" },
         { command: "stop", description: "Abort active turn or tool" }
       ]);
       console.log("[Bridge] Telegram bot commands registered successfully.");
