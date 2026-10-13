@@ -1,5 +1,25 @@
 import { marked } from "marked";
 
+export interface ExtractedImage {
+  alt: string;
+  source: string;
+  rawMatch: string;
+}
+
+/**
+ * Extracts markdown images (![alt](path_or_url)) from markdown text.
+ */
+export function extractImages(markdown: string): { textWithoutImages: string; images: ExtractedImage[] } {
+  const images: ExtractedImage[] = [];
+  const regex = /!\[(.*?)\]\([<]?([^>\)]+)[>]?\)/g;
+  const textWithoutImages = markdown.replace(regex, (match, alt, source) => {
+    images.push({ alt: alt.trim(), source: source.trim(), rawMatch: match });
+    return "";
+  });
+
+  return { textWithoutImages: textWithoutImages.trim(), images };
+}
+
 /**
  * Converts standard GitHub Flavored Markdown into Telegram-compatible HTML.
  * Strictly outputs only tags officially permitted by Telegram Bot API:

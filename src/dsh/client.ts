@@ -3,6 +3,15 @@ import crypto from "crypto";
 import { DshAuth } from "./auth.js";
 import { AppConfig } from "../config.js";
 
+export type PromptContentPart =
+  | { type: "text"; text: string }
+  | {
+      type: "image";
+      mediaType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+      data: string;
+      name?: string;
+    };
+
 export interface SessionItem {
   sessionId: string;
   updatedAt: number;
@@ -118,14 +127,17 @@ export class DshClient {
     return res;
   }
 
-  public async sendPrompt(sessionId: string, text: string): Promise<string> {
+  public async sendPrompt(sessionId: string, content: string | PromptContentPart[]): Promise<string> {
     const requestId = crypto.randomUUID();
+    const contentParts: PromptContentPart[] =
+      typeof content === "string" ? [{ type: "text", text: content }] : content;
+
     await this.rpcCall<{ accepted: boolean }>("session/prompt", {
       request: {
         requestId,
         sessionId,
         mode: "queue",
-        content: [{ type: "text", text }],
+        content: contentParts,
         clientTimeZone: "Asia/Tehran"
       }
     });

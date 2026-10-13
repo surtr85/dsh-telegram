@@ -1,11 +1,16 @@
 import fs from "fs";
 import path from "path";
-import { Bot, InlineKeyboard } from "grammy";
+import { Bot, InlineKeyboard, InputFile } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { AppConfig } from "../config.js";
-import { DshClient } from "../dsh/client.js";
-import { formatToTelegramHtml, stripHtml, chunkHtmlMessage } from "./formatter.js";
+import { DshClient, PromptContentPart } from "../dsh/client.js";
+import {
+  formatToTelegramHtml,
+  stripHtml,
+  chunkHtmlMessage,
+  extractImages
+} from "./formatter.js";
 
 function escapeHtml(str: string): string {
   return str
@@ -105,12 +110,13 @@ export class TelegramBridge {
           `📌 <b>Current Session:</b> ${escapeHtml(title)}\n` +
           `🆔 <code>${sessionId}</code>\n` +
           `🧠 <b>Model:</b> <code>${escapeHtml(model)}</code>\n\n` +
-          `<b>Commands & Usage:</b>\n` +
-          `• Send any text to chat and work directly inside this session.\n` +
+          `<b>Commands & Capabilities:</b>\n` +
+          `• 💬 Send any text, photo, or screenshot with caption.\n` +
+          `• 🖼 Receive rich posts with images, code blocks, and formatting.\n` +
           `• <code>/new</code> - Start a brand new session.\n` +
           `• <code>/session</code> - Show details & token metrics for this session.\n` +
           `• <code>/sessions</code> - Browse & switch between recent sessions.\n` +
-          `• <code>/attach</code> - Re-attach to the newest active Web GUI session.`;
+          `• <code>/attach</code> - Re-attach to newest active Web GUI session.`;
 
         await ctx.reply(text, { parse_mode: "HTML" });
       } catch (err: any) {
@@ -144,7 +150,9 @@ export class TelegramBridge {
         const current = sessions.find((s) => s.sessionId === sessionId);
 
         if (!current) {
-          await ctx.reply(`Session <code>${sessionId}</code> not found in DSH catalog.`, { parse_mode: "HTML" });
+          await ctx.reply(`Session <code>${sessionId}</code> not found in DSH catalog.`, {
+            parse_mode: "HTML"
+          });
           return;
         }
 
@@ -224,7 +232,9 @@ export class TelegramBridge {
     this.bot.callbackQuery(/^switch:(.+)$/, async (ctx) => {
       const targetSessionId = ctx.match[1];
       this.persistSession(targetSessionId);
-      await ctx.answerCallbackQuery({ text: `Switched to session ${targetSessionId.slice(0, 8)}` });
+      await ctx.answerCallbackQuery({
+        text: `Switched to session ${targetSessionId.slice(0, 8)}`
+      });
       await ctx.editMessageText(
         `✅ <b>Active Session Switched</b>\n🆔 <code>${targetSessionId}</code>\nSubsequent messages will route here.`,
         { parse_mode: "HTML" }
@@ -233,137 +243,341 @@ export class TelegramBridge {
   }
 
   private setupMessageHandler() {
-    this.bot.on("message:text", async (ctx) => {
-      const userText = ctx.message.text.trim();
-      console.log(`[Bridge] Received text message: "${userText.slice(0, 50)}" from user ${ctx.from?.id}`);
-      if (userText.startsWith("/")) return; // Handled by commands
+    this.bot.on(["message:text", "message:photo", "message:document"], async (ctx) => {
+      if (ctx.message.text?.startsWith("/") || ctx.message.caption?.startsWith("/")) return;
 
       const sessionId = await this.resolveSession();
 
-      // Send initial progress message
-      const statusMsg = await ctx.reply("⏳ <i>DSH is processing prompt...</i>", {
-        parse_mode: "HTML",
-        reply_parameters: { message_id: ctx.message.message_id }
-      });
+      // 1. Photo with optional caption
+      if (ctx.message.photo) {
+        const photos = ctx.message.photo;
+        const bestPhoto = photos[photos.length - 1];
+        const caption =
+          ctx.message.caption?.trim() || "تصویر ارسالی از تلگرام. لطفاً بررسی و تحلیل کنید.";
 
-      let currentHtml = "⏳ <i>DSH is thinking...</i>";
-      let lastEditedHtml = currentHtml;
-      let lastEditTime = Date.now();
-      let completed = false;
-      let updateTimer: NodeJS.Timeout | null = null;
-      let unsubscribe: (() => void) | null = null;
-
-      const scheduleEdit = (newHtml: string, force = false) => {
-        currentHtml = newHtml;
-        const now = Date.now();
-        const elapsed = now - lastEditTime;
-
-        if (force || elapsed >= 1500) {
-          if (updateTimer) {
-            clearTimeout(updateTimer);
-            updateTimer = null;
+        console.log(
+          `[Bridge] Received photo from user ${ctx.from?.id} (caption: "${caption.slice(0, 40)}")`
+        );
+        const statusMsg = await ctx.reply(
+          "⏳ <i>در حال دریافت و ارسال تصویر به مدل هوش مصنوعی...</i>",
+          {
+            parse_mode: "HTML",
+            reply_parameters: { message_id: ctx.message.message_id }
           }
-          lastEditTime = now;
-          if (newHtml !== lastEditedHtml) {
-            lastEditedHtml = newHtml;
-            ctx.api
-              .editMessageText(ctx.chat.id, statusMsg.message_id, newHtml, {
-                parse_mode: "HTML"
-              })
-              .catch(() => {
-                // Fallback to plain text if HTML tags mismatched
-                ctx.api
-                  .editMessageText(
-                    ctx.chat.id,
-                    statusMsg.message_id,
-                    newHtml.replace(/<[^>]*>/g, "")
-                  )
-                  .catch(() => {});
-              });
-          }
-        } else if (!updateTimer) {
-          updateTimer = setTimeout(() => {
-            updateTimer = null;
-            scheduleEdit(currentHtml, true);
-          }, 1500 - elapsed);
-        }
-      };
+        );
 
-      try {
-        // Start streaming events
-        unsubscribe = this.dsh.followSession(sessionId, {
-          onToolCall: (name, desc) => {
-            const shortDesc = desc ? ` <code>${escapeHtml(desc.slice(0, 45))}</code>` : "";
-            scheduleEdit(`⚙️ <b>Executing tool:</b> <code>${escapeHtml(name)}</code>${shortDesc}\n⏳ <i>Working...</i>`);
-          },
-          onToolResult: (name) => {
-            scheduleEdit(`✅ <b>Finished tool:</b> <code>${escapeHtml(name)}</code>\n⏳ <i>Analyzing output...</i>`);
-          },
-          onAssistantMessage: async (text, isFinal) => {
-            if (isFinal) {
-              completed = true;
-              if (updateTimer) clearTimeout(updateTimer);
+        try {
+          const file = await ctx.api.getFile(bestPhoto.file_id);
+          if (!file.file_path) throw new Error("Could not retrieve file path from Telegram");
+          const fileUrl = `https://api.telegram.org/file/bot${this.config.telegramToken}/${file.file_path}`;
+          const res = await fetch(fileUrl);
+          if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
+          const arrayBuffer = await res.arrayBuffer();
+          const base64 = Buffer.from(arrayBuffer).toString("base64");
 
-              const formattedHtml = formatToTelegramHtml(text);
-              const chunks = chunkHtmlMessage(formattedHtml);
-
-              for (let i = 0; i < chunks.length; i++) {
-                const chunk = chunks[i];
-                if (i === 0) {
-                  try {
-                    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, chunk, {
-                      parse_mode: "HTML"
-                    });
-                  } catch (err: any) {
-                    console.error("[Edit HTML Error]:", err.message);
-                    await ctx.api
-                      .editMessageText(ctx.chat.id, statusMsg.message_id, stripHtml(chunk))
-                      .catch(() => {});
-                  }
-                } else {
-                  try {
-                    await ctx.reply(chunk, { parse_mode: "HTML" });
-                  } catch (err: any) {
-                    console.error("[Reply HTML Error]:", err.message);
-                    await ctx.reply(stripHtml(chunk)).catch(() => {});
-                  }
-                }
-              }
-
-              if (unsubscribe) {
-                unsubscribe();
-                unsubscribe = null;
-              }
-            } else {
-              // Intermediate text preview while tools are running
-              scheduleEdit(`💭 <b>Assistant Update:</b>\n\n${escapeHtml(text.slice(-300))}`);
+          const promptContent: PromptContentPart[] = [
+            {
+              type: "image",
+              mediaType: "image/jpeg",
+              data: base64,
+              name: `telegram_${bestPhoto.file_unique_id}.jpg`
+            },
+            {
+              type: "text",
+              text: caption
             }
-          },
-          onError: (err) => {
-            console.error(`[Follow Stream Error]:`, err.message);
-          }
+          ];
+
+          await this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg);
+        } catch (err: any) {
+          await ctx.api.editMessageText(
+            ctx.chat.id,
+            statusMsg.message_id,
+            `❌ <b>خطا در دریافت تصویر:</b> <code>${escapeHtml(err.message)}</code>`,
+            { parse_mode: "HTML" }
+          );
+        }
+        return;
+      }
+
+      // 2. Uncompressed image document with optional caption
+      if (ctx.message.document && ctx.message.document.mime_type?.startsWith("image/")) {
+        const doc = ctx.message.document;
+        const caption =
+          ctx.message.caption?.trim() || "تصویر ارسالی از تلگرام. لطفاً بررسی و تحلیل کنید.";
+
+        console.log(
+          `[Bridge] Received image document from user ${ctx.from?.id} (name: ${doc.file_name})`
+        );
+        const statusMsg = await ctx.reply("⏳ <i>در حال دریافت فایل تصویر در DSH...</i>", {
+          parse_mode: "HTML",
+          reply_parameters: { message_id: ctx.message.message_id }
         });
 
-        // Submit prompt to DSH
-        await this.dsh.sendPrompt(sessionId, userText);
+        try {
+          const file = await ctx.api.getFile(doc.file_id);
+          if (!file.file_path) throw new Error("Could not retrieve file path from Telegram");
+          const fileUrl = `https://api.telegram.org/file/bot${this.config.telegramToken}/${file.file_path}`;
+          const res = await fetch(fileUrl);
+          if (!res.ok) throw new Error(`Download failed: ${res.statusText}`);
+          const arrayBuffer = await res.arrayBuffer();
+          const base64 = Buffer.from(arrayBuffer).toString("base64");
 
-        // Fallback safety timeout (10 minutes)
-        setTimeout(() => {
-          if (!completed && unsubscribe) {
-            unsubscribe();
-            scheduleEdit(`⚠️ <i>Turn timed out after 10m. Check DSH Web GUI for status.</i>`, true);
-          }
-        }, 600000);
-      } catch (err: any) {
-        if (unsubscribe) unsubscribe();
-        await ctx.api.editMessageText(
-          ctx.chat.id,
-          statusMsg.message_id,
-          `❌ <b>Error sending prompt to DSH:</b>\n<code>${escapeHtml(err.message)}</code>`,
-          { parse_mode: "HTML" }
+          let mediaType: "image/png" | "image/jpeg" | "image/webp" | "image/gif" = "image/png";
+          if (doc.mime_type === "image/jpeg") mediaType = "image/jpeg";
+          else if (doc.mime_type === "image/webp") mediaType = "image/webp";
+          else if (doc.mime_type === "image/gif") mediaType = "image/gif";
+
+          const promptContent: PromptContentPart[] = [
+            {
+              type: "image",
+              mediaType,
+              data: base64,
+              name: doc.file_name || `telegram_${doc.file_unique_id}.png`
+            },
+            {
+              type: "text",
+              text: caption
+            }
+          ];
+
+          await this.handleSessionTurn(ctx, sessionId, promptContent, statusMsg);
+        } catch (err: any) {
+          await ctx.api.editMessageText(
+            ctx.chat.id,
+            statusMsg.message_id,
+            `❌ <b>خطا در دریافت فایل تصویر:</b> <code>${escapeHtml(err.message)}</code>`,
+            { parse_mode: "HTML" }
+          );
+        }
+        return;
+      }
+
+      // 3. Plain text message
+      if (ctx.message.text) {
+        const userText = ctx.message.text.trim();
+        console.log(
+          `[Bridge] Received text message: "${userText.slice(0, 50)}" from user ${ctx.from?.id}`
         );
+        const statusMsg = await ctx.reply("⏳ <i>DSH is processing prompt...</i>", {
+          parse_mode: "HTML",
+          reply_parameters: { message_id: ctx.message.message_id }
+        });
+
+        await this.handleSessionTurn(ctx, sessionId, userText, statusMsg);
+        return;
       }
     });
+  }
+
+  private async handleSessionTurn(
+    ctx: any,
+    sessionId: string,
+    promptContent: string | PromptContentPart[],
+    statusMsg: any
+  ) {
+    let currentHtml = "⏳ <i>DSH is thinking...</i>";
+    let lastEditedHtml = currentHtml;
+    let lastEditTime = Date.now();
+    let completed = false;
+    let updateTimer: NodeJS.Timeout | null = null;
+    let unsubscribe: (() => void) | null = null;
+
+    const scheduleEdit = (newHtml: string, force = false) => {
+      currentHtml = newHtml;
+      const now = Date.now();
+      const elapsed = now - lastEditTime;
+
+      if (force || elapsed >= 1500) {
+        if (updateTimer) {
+          clearTimeout(updateTimer);
+          updateTimer = null;
+        }
+        lastEditTime = now;
+        if (newHtml !== lastEditedHtml) {
+          lastEditedHtml = newHtml;
+          ctx.api
+            .editMessageText(ctx.chat.id, statusMsg.message_id, newHtml, {
+              parse_mode: "HTML"
+            })
+            .catch(() => {
+              ctx.api
+                .editMessageText(
+                  ctx.chat.id,
+                  statusMsg.message_id,
+                  newHtml.replace(/<[^>]*>/g, "")
+                )
+                .catch(() => {});
+            });
+        }
+      } else if (!updateTimer) {
+        updateTimer = setTimeout(() => {
+          updateTimer = null;
+          scheduleEdit(currentHtml, true);
+        }, 1500 - elapsed);
+      }
+    };
+
+    try {
+      unsubscribe = this.dsh.followSession(sessionId, {
+        onToolCall: (name, desc) => {
+          const shortDesc = desc ? ` <code>${escapeHtml(desc.slice(0, 45))}</code>` : "";
+          scheduleEdit(
+            `⚙️ <b>Executing tool:</b> <code>${escapeHtml(name)}</code>${shortDesc}\n⏳ <i>Working...</i>`
+          );
+        },
+        onToolResult: (name) => {
+          scheduleEdit(
+            `✅ <b>Finished tool:</b> <code>${escapeHtml(name)}</code>\n⏳ <i>Analyzing output...</i>`
+          );
+        },
+        onAssistantMessage: async (text, isFinal) => {
+          if (isFinal) {
+            completed = true;
+            if (updateTimer) clearTimeout(updateTimer);
+
+            await this.deliverAssistantResponse(ctx, statusMsg, text);
+
+            if (unsubscribe) {
+              unsubscribe();
+              unsubscribe = null;
+            }
+          } else {
+            const preview = formatToTelegramHtml(text.slice(-300));
+            scheduleEdit(`💭 <b>Assistant Update:</b>\n\n${preview}`);
+          }
+        },
+        onError: (err) => {
+          console.error(`[Follow Stream Error]:`, err.message);
+        }
+      });
+
+      await this.dsh.sendPrompt(sessionId, promptContent);
+
+      // Safety timeout after 10 minutes
+      setTimeout(() => {
+        if (!completed && unsubscribe) {
+          unsubscribe();
+          scheduleEdit(`⚠️ <i>Turn timed out after 10m. Check DSH Web GUI for status.</i>`, true);
+        }
+      }, 600000);
+    } catch (err: any) {
+      if (unsubscribe) unsubscribe();
+      await ctx.api.editMessageText(
+        ctx.chat.id,
+        statusMsg.message_id,
+        `❌ <b>Error communicating with DSH:</b>\n<code>${escapeHtml(err.message)}</code>`,
+        { parse_mode: "HTML" }
+      );
+    }
+  }
+
+  /**
+   * Intelligently delivers the assistant response.
+   * If markdown images are detected, sends them as rich Telegram photos with caption and post text!
+   */
+  private async deliverAssistantResponse(ctx: any, statusMsg: any, rawText: string) {
+    const { textWithoutImages, images } = extractImages(rawText);
+
+    // Case 1: Pure text post without images
+    if (images.length === 0) {
+      const formattedHtml = formatToTelegramHtml(rawText);
+      const chunks = chunkHtmlMessage(formattedHtml);
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        if (i === 0) {
+          try {
+            await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, chunk, {
+              parse_mode: "HTML"
+            });
+          } catch (err: any) {
+            console.error("[Edit HTML Error]:", err.message);
+            await ctx.api
+              .editMessageText(ctx.chat.id, statusMsg.message_id, stripHtml(chunk))
+              .catch(() => {});
+          }
+        } else {
+          try {
+            await ctx.reply(chunk, { parse_mode: "HTML" });
+          } catch (err: any) {
+            console.error("[Reply HTML Error]:", err.message);
+            await ctx.reply(stripHtml(chunk)).catch(() => {});
+          }
+        }
+      }
+      return;
+    }
+
+    // Case 2: Response contains image(s) -> Deliver rich media post!
+    try {
+      for (const img of images) {
+        let photoInput: string | InputFile | null = null;
+
+        if (img.source.startsWith("http://") || img.source.startsWith("https://")) {
+          photoInput = img.source;
+        } else {
+          let resolved = img.source;
+          if (!path.isAbsolute(resolved)) {
+            resolved = path.resolve(this.config.defaultCwd, resolved);
+          }
+          if (fs.existsSync(resolved)) {
+            photoInput = new InputFile(resolved);
+          }
+        }
+
+        if (photoInput) {
+          const formattedCaption = formatToTelegramHtml(textWithoutImages);
+          // If the post is within Telegram caption limit (1024 chars), send photo with caption!
+          if (images.length === 1 && formattedCaption.length > 0 && formattedCaption.length <= 1024) {
+            try {
+              await ctx.replyWithPhoto(photoInput, {
+                caption: formattedCaption,
+                parse_mode: "HTML"
+              });
+              await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+              return;
+            } catch (err: any) {
+              console.error("[Photo Caption Error]:", err.message);
+            }
+          }
+
+          // If text is longer than 1024 chars, send the photo with alt label, then send text chunks below it
+          try {
+            const photoAlt = img.alt ? `🖼 <b>${escapeHtml(img.alt)}</b>` : undefined;
+            await ctx.replyWithPhoto(photoInput, {
+              caption: photoAlt,
+              parse_mode: "HTML"
+            });
+          } catch (err: any) {
+            console.error("[Photo Delivery Error]:", err.message);
+          }
+        }
+      }
+
+      // Send the remaining formatted text chunks below the media
+      const formattedHtml = formatToTelegramHtml(textWithoutImages);
+      if (formattedHtml.trim()) {
+        const chunks = chunkHtmlMessage(formattedHtml);
+        for (const chunk of chunks) {
+          try {
+            await ctx.reply(chunk, { parse_mode: "HTML" });
+          } catch (err: any) {
+            await ctx.reply(stripHtml(chunk)).catch(() => {});
+          }
+        }
+      }
+
+      // Clean up the initial status placeholder
+      await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+    } catch (err: any) {
+      console.error("[Media Delivery Error]:", err.message);
+      // Fallback to text editing
+      const formattedHtml = formatToTelegramHtml(rawText);
+      await ctx.api
+        .editMessageText(ctx.chat.id, statusMsg.message_id, stripHtml(formattedHtml))
+        .catch(() => {});
+    }
   }
 
   public async start() {
