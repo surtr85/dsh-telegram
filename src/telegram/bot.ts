@@ -4,7 +4,14 @@ import { Bot, InlineKeyboard } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { AppConfig } from "../config.js";
-import { DshClient, SessionItem } from "../dsh/client.js";
+import { DshClient } from "../dsh/client.js";
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
 
 export class TelegramBridge {
   private bot: Bot;
@@ -92,18 +99,18 @@ export class TelegramBridge {
         const model = current?.projections?.values?.modelSelection?.lastUsed?.model || "Standard";
 
         const text =
-          `🤖 *DeepSeek Harness (DSH) Bridge Connected*\n\n` +
-          `📌 *Current Session:* ${title}\n` +
-          `🆔 \`${sessionId}\`\n` +
-          `🧠 *Model:* \`${model}\`\n\n` +
-          `*Usage:*\n` +
-          `• Send any message to chat and execute tasks directly in this session\\.\n` +
-          `• \`/new\` \\- Start a brand new session\\.\n` +
-          `• \`/session\` \\- Show status & tokens for current session\\.\n` +
-          `• \`/sessions\` \\- Switch to another existing session\\.\n` +
-          `• \`/attach\` \\- Re\\-attach to the newest active Web GUI session\\.`;
+          `🤖 <b>DeepSeek Harness (DSH) Bridge Connected</b>\n\n` +
+          `📌 <b>Current Session:</b> ${escapeHtml(title)}\n` +
+          `🆔 <code>${sessionId}</code>\n` +
+          `🧠 <b>Model:</b> <code>${escapeHtml(model)}</code>\n\n` +
+          `<b>Commands & Usage:</b>\n` +
+          `• Send any text to chat and work directly inside this session.\n` +
+          `• <code>/new</code> - Start a brand new session.\n` +
+          `• <code>/session</code> - Show details & token metrics for this session.\n` +
+          `• <code>/sessions</code> - Browse & switch between recent sessions.\n` +
+          `• <code>/attach</code> - Re-attach to the newest active Web GUI session.`;
 
-        await ctx.reply(text, { parse_mode: "MarkdownV2" });
+        await ctx.reply(text, { parse_mode: "HTML" });
       } catch (err: any) {
         await ctx.reply(`❌ Error initializing session: ${err.message}`);
       }
@@ -119,8 +126,8 @@ export class TelegramBridge {
         await ctx.api.editMessageText(
           ctx.chat.id,
           waitMsg.message_id,
-          `✨ *New DSH Session Started*\n🆔 \`${created.sessionId}\`\n\nAll subsequent messages will execute inside this session\\.`,
-          { parse_mode: "MarkdownV2" }
+          `✨ <b>New DSH Session Started</b>\n🆔 <code>${created.sessionId}</code>\n\nAll subsequent messages will execute inside this session.`,
+          { parse_mode: "HTML" }
         );
       } catch (err: any) {
         await ctx.reply(`❌ Failed to create session: ${err.message}`);
@@ -135,24 +142,23 @@ export class TelegramBridge {
         const current = sessions.find((s) => s.sessionId === sessionId);
 
         if (!current) {
-          await ctx.reply(`Session \`${sessionId}\` not found in DSH catalog.`);
+          await ctx.reply(`Session <code>${sessionId}</code> not found in DSH catalog.`, { parse_mode: "HTML" });
           return;
         }
 
         const vals = current.projections?.values;
         const title = vals?.title || "Untitled Session";
-        const turns = current.projections?.asOfSeq || 0;
-        const tokens = vals?.tokenUsage?.outputTokens || 0;
+        const seq = current.projections?.asOfSeq || 0;
 
         const info =
-          `📊 *Session Details*\n\n` +
-          `📌 *Title:* ${title}\n` +
-          `🆔 \`${sessionId}\`\n` +
-          `🔄 *Status:* ${current.running ? "⏳ Busy / Running" : "💤 Idle"}\n` +
-          `📈 *Events Seq:* ${turns}\n` +
-          `📁 *CWD:* \`${current.cwd || this.config.defaultCwd}\``;
+          `📊 <b>Session Details</b>\n\n` +
+          `📌 <b>Title:</b> ${escapeHtml(title)}\n` +
+          `🆔 <code>${sessionId}</code>\n` +
+          `🔄 <b>Status:</b> ${current.running ? "⏳ Busy / Running" : "💤 Idle"}\n` +
+          `📈 <b>Events Seq:</b> ${seq}\n` +
+          `📁 <b>CWD:</b> <code>${escapeHtml(current.cwd || this.config.defaultCwd)}</code>`;
 
-        await ctx.reply(info, { parse_mode: "Markdown" });
+        await ctx.reply(info, { parse_mode: "HTML" });
       } catch (err: any) {
         await ctx.reply(`❌ Error getting session: ${err.message}`);
       }
@@ -169,8 +175,8 @@ export class TelegramBridge {
         this.persistSession(active.sessionId);
         const title = active.projections?.values?.title || "Active Web Session";
         await ctx.reply(
-          `🔗 *Attached to Web GUI Session*\n📌 ${title}\n🆔 \`${active.sessionId}\``,
-          { parse_mode: "Markdown" }
+          `🔗 <b>Attached to Web GUI Session</b>\n📌 ${escapeHtml(title)}\n🆔 <code>${active.sessionId}</code>`,
+          { parse_mode: "HTML" }
         );
       } catch (err: any) {
         await ctx.reply(`❌ Failed to attach: ${err.message}`);
@@ -189,12 +195,12 @@ export class TelegramBridge {
         const recent = items.slice(0, 6);
         const keyboard = new InlineKeyboard();
 
-        let listText = "🗂 *Recent DSH Sessions:*\n\n";
+        let listText = "🗂 <b>Recent DSH Sessions:</b>\n\n";
         recent.forEach((s, idx) => {
           const isCurrent = s.sessionId === this.currentSessionId;
           const marker = isCurrent ? "👉 " : `${idx + 1}. `;
           const title = s.projections?.values?.title || `Session ${s.sessionId.slice(0, 8)}`;
-          listText += `${marker}*${title}*\n\`${s.sessionId}\`\n\n`;
+          listText += `${marker}<b>${escapeHtml(title)}</b>\n<code>${s.sessionId}</code>\n\n`;
 
           keyboard.text(
             `${isCurrent ? "✅ " : ""}${idx + 1}. ${title.slice(0, 18)}`,
@@ -204,7 +210,7 @@ export class TelegramBridge {
         });
 
         await ctx.reply(listText, {
-          parse_mode: "Markdown",
+          parse_mode: "HTML",
           reply_markup: keyboard
         });
       } catch (err: any) {
@@ -218,8 +224,8 @@ export class TelegramBridge {
       this.persistSession(targetSessionId);
       await ctx.answerCallbackQuery({ text: `Switched to session ${targetSessionId.slice(0, 8)}` });
       await ctx.editMessageText(
-        `✅ *Active Session Switched*\n🆔 \`${targetSessionId}\`\nSubsequent messages will route here.`,
-        { parse_mode: "Markdown" }
+        `✅ <b>Active Session Switched</b>\n🆔 <code>${targetSessionId}</code>\nSubsequent messages will route here.`,
+        { parse_mode: "HTML" }
       );
     });
   }
@@ -232,20 +238,20 @@ export class TelegramBridge {
       const sessionId = await this.resolveSession();
 
       // Send initial progress message
-      const statusMsg = await ctx.reply("⏳ _DSH is processing prompt..._", {
-        parse_mode: "Markdown",
+      const statusMsg = await ctx.reply("⏳ <i>DSH is processing prompt...</i>", {
+        parse_mode: "HTML",
         reply_parameters: { message_id: ctx.message.message_id }
       });
 
-      let currentStatus = "⏳ _DSH is thinking..._";
-      let lastEditedText = currentStatus;
+      let currentHtml = "⏳ <i>DSH is thinking...</i>";
+      let lastEditedHtml = currentHtml;
       let lastEditTime = Date.now();
       let completed = false;
       let updateTimer: NodeJS.Timeout | null = null;
       let unsubscribe: (() => void) | null = null;
 
-      const scheduleEdit = (newText: string, force = false) => {
-        currentStatus = newText;
+      const scheduleEdit = (newHtml: string, force = false) => {
+        currentHtml = newHtml;
         const now = Date.now();
         const elapsed = now - lastEditTime;
 
@@ -255,20 +261,27 @@ export class TelegramBridge {
             updateTimer = null;
           }
           lastEditTime = now;
-          if (newText !== lastEditedText) {
-            lastEditedText = newText;
+          if (newHtml !== lastEditedHtml) {
+            lastEditedHtml = newHtml;
             ctx.api
-              .editMessageText(ctx.chat.id, statusMsg.message_id, newText, {
-                parse_mode: "Markdown"
+              .editMessageText(ctx.chat.id, statusMsg.message_id, newHtml, {
+                parse_mode: "HTML"
               })
               .catch(() => {
-                // Ignore telegram edit throttling or parse errors during stream
+                // Fallback to plain text if HTML tags mismatched
+                ctx.api
+                  .editMessageText(
+                    ctx.chat.id,
+                    statusMsg.message_id,
+                    newHtml.replace(/<[^>]*>/g, "")
+                  )
+                  .catch(() => {});
               });
           }
         } else if (!updateTimer) {
           updateTimer = setTimeout(() => {
             updateTimer = null;
-            scheduleEdit(currentStatus, true);
+            scheduleEdit(currentHtml, true);
           }, 1500 - elapsed);
         }
       };
@@ -277,29 +290,45 @@ export class TelegramBridge {
         // Start streaming events
         unsubscribe = this.dsh.followSession(sessionId, {
           onToolCall: (name, desc) => {
-            const shortDesc = desc ? ` \`${desc.slice(0, 40)}\`` : "";
-            scheduleEdit(`⚙️ *Executing tool:* \`${name}\`${shortDesc}\n⏳ _Working..._`);
+            const shortDesc = desc ? ` <code>${escapeHtml(desc.slice(0, 45))}</code>` : "";
+            scheduleEdit(`⚙️ <b>Executing tool:</b> <code>${escapeHtml(name)}</code>${shortDesc}\n⏳ <i>Working...</i>`);
           },
           onToolResult: (name) => {
-            scheduleEdit(`✅ *Finished tool:* \`${name}\`\n⏳ _Analyzing output..._`);
+            scheduleEdit(`✅ <b>Finished tool:</b> <code>${escapeHtml(name)}</code>\n⏳ <i>Analyzing output...</i>`);
           },
           onAssistantMessage: (text, isFinal) => {
             if (isFinal) {
               completed = true;
               if (updateTimer) clearTimeout(updateTimer);
 
-              // Split message if longer than Telegram 4000 char limit
+              // Try Markdown first; fallback to plain text if Telegram Markdown parsing fails
+              const sendOrEdit = async (msg: string, isFirst: boolean) => {
+                if (isFirst) {
+                  try {
+                    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, msg, {
+                      parse_mode: "Markdown"
+                    });
+                  } catch {
+                    try {
+                      await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, msg);
+                    } catch {
+                      await ctx.reply(msg).catch(() => {});
+                    }
+                  }
+                } else {
+                  try {
+                    await ctx.reply(msg, { parse_mode: "Markdown" });
+                  } catch {
+                    await ctx.reply(msg).catch(() => {});
+                  }
+                }
+              };
+
               if (text.length <= 4000) {
-                ctx.api
-                  .editMessageText(ctx.chat.id, statusMsg.message_id, text)
-                  .catch(() => {
-                    ctx.reply(text);
-                  });
+                sendOrEdit(text, true);
               } else {
-                ctx.api
-                  .editMessageText(ctx.chat.id, statusMsg.message_id, text.slice(0, 4000))
-                  .catch(() => {});
-                ctx.reply(text.slice(4000));
+                sendOrEdit(text.slice(0, 4000), true);
+                sendOrEdit(text.slice(4000), false);
               }
 
               if (unsubscribe) {
@@ -307,8 +336,8 @@ export class TelegramBridge {
                 unsubscribe = null;
               }
             } else {
-              // Intermediate text while tools are still running
-              scheduleEdit(`💭 *Assistant Update:*\n\n${text.slice(-500)}`);
+              // Intermediate text preview while tools are running
+              scheduleEdit(`💭 <b>Assistant Update:</b>\n\n${escapeHtml(text.slice(-400))}`);
             }
           },
           onError: (err) => {
@@ -323,7 +352,7 @@ export class TelegramBridge {
         setTimeout(() => {
           if (!completed && unsubscribe) {
             unsubscribe();
-            scheduleEdit(`⚠️ _Turn timed out after 10m. Check DSH Web GUI for status._`, true);
+            scheduleEdit(`⚠️ <i>Turn timed out after 10m. Check DSH Web GUI for status.</i>`, true);
           }
         }, 600000);
       } catch (err: any) {
@@ -331,8 +360,8 @@ export class TelegramBridge {
         await ctx.api.editMessageText(
           ctx.chat.id,
           statusMsg.message_id,
-          `❌ *Error sending prompt to DSH:*\n\`${err.message}\``,
-          { parse_mode: "Markdown" }
+          `❌ <b>Error sending prompt to DSH:</b>\n<code>${escapeHtml(err.message)}</code>`,
+          { parse_mode: "HTML" }
         );
       }
     });
