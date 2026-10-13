@@ -5,6 +5,7 @@ import { autoRetry } from "@grammyjs/auto-retry";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { AppConfig } from "../config.js";
 import { DshClient } from "../dsh/client.js";
+import { formatToTelegramHtml, stripHtml, chunkHtmlMessage } from "./formatter.js";
 
 function escapeHtml(str: string): string {
   return str
@@ -91,6 +92,7 @@ export class TelegramBridge {
   private setupCommands() {
     // /start
     this.bot.command("start", async (ctx) => {
+      console.log(`[Bridge] Received /start from user ${ctx.from?.id}`);
       try {
         const sessionId = await this.resolveSession();
         const sessions = await this.dsh.listSessions();
@@ -233,6 +235,7 @@ export class TelegramBridge {
   private setupMessageHandler() {
     this.bot.on("message:text", async (ctx) => {
       const userText = ctx.message.text.trim();
+      console.log(`[Bridge] Received text message: "${userText.slice(0, 50)}" from user ${ctx.from?.id}`);
       if (userText.startsWith("/")) return; // Handled by commands
 
       const sessionId = await this.resolveSession();
@@ -296,39 +299,33 @@ export class TelegramBridge {
           onToolResult: (name) => {
             scheduleEdit(`✅ <b>Finished tool:</b> <code>${escapeHtml(name)}</code>\n⏳ <i>Analyzing output...</i>`);
           },
-          onAssistantMessage: (text, isFinal) => {
+          onAssistantMessage: async (text, isFinal) => {
             if (isFinal) {
               completed = true;
               if (updateTimer) clearTimeout(updateTimer);
 
-              // Try Markdown first; fallback to plain text if Telegram Markdown parsing fails
-              const sendOrEdit = async (msg: string, isFirst: boolean) => {
-                if (isFirst) {
+              const formattedHtml = formatToTelegramHtml(text);
+              const chunks = chunkHtmlMessage(formattedHtml);
+
+              for (let i = 0; i < chunks.length; i++) {
+                const chunk = chunks[i];
+                if (i === 0) {
                   try {
-                    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, msg, {
-                      parse_mode: "Markdown"
+                    await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, chunk, {
+                      parse_mode: "HTML"
                     });
                   } catch {
-                    try {
-                      await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, msg);
-                    } catch {
-                      await ctx.reply(msg).catch(() => {});
-                    }
+                    await ctx.api
+                      .editMessageText(ctx.chat.id, statusMsg.message_id, stripHtml(chunk))
+                      .catch(() => {});
                   }
                 } else {
                   try {
-                    await ctx.reply(msg, { parse_mode: "Markdown" });
+                    await ctx.reply(chunk, { parse_mode: "HTML" });
                   } catch {
-                    await ctx.reply(msg).catch(() => {});
+                    await ctx.reply(stripHtml(chunk)).catch(() => {});
                   }
                 }
-              };
-
-              if (text.length <= 4000) {
-                sendOrEdit(text, true);
-              } else {
-                sendOrEdit(text.slice(0, 4000), true);
-                sendOrEdit(text.slice(4000), false);
               }
 
               if (unsubscribe) {
@@ -337,7 +334,7 @@ export class TelegramBridge {
               }
             } else {
               // Intermediate text preview while tools are running
-              scheduleEdit(`💭 <b>Assistant Update:</b>\n\n${escapeHtml(text.slice(-400))}`);
+              scheduleEdit(`💭 <b>Assistant Update:</b>\n\n${escapeHtml(text.slice(-300))}`);
             }
           },
           onError: (err) => {
