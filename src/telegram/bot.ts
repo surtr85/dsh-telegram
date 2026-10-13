@@ -339,7 +339,8 @@ export class TelegramBridge {
   }
 
   public async start() {
-    console.log(`[Bridge] Starting Telegram bot (@${this.bot.botInfo?.username || "bot"})...`);
+    await this.bot.init();
+    console.log(`[Bridge] Starting Telegram bot (@${this.bot.botInfo.username})...`);
     await this.bot.start({
       onStart: (info) => {
         console.log(`[Bridge] Connected successfully as @${info.username} (ID: ${info.id})`);
