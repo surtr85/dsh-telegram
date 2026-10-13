@@ -1,0 +1,36 @@
+{
+  "projectName": "dsh-telegram",
+  "projectOwner": "surtr85",
+  "repoType": "github",
+  "repoHost": "https://github.com",
+  "files": [
+    "README.md"
+  ],
+  "imageSize": 100,
+  "commit": false,
+  "contributors": [
+    {
+      "login": "surtr85",
+      "name": "Sajjad",
+      "avatar_url": "https://github.com/surtr85.png",
+      "profile": "https://github.com/surtr85",
+      "contributions": [
+        "code",
+        "maintenance",
+        "design"
+      ]
+    },
+    {
+      "login": "deepseek-ai/deepseek-harness",
+      "name": "DeepSeek Harness (DSH)",
+      "avatar_url": "https://github.com/deepseek-ai.png",
+      "profile": "https://github.com/deepseek-ai/deepseek-harness",
+      "contributions": [
+        "code",
+        "ideas",
+        "infra"
+      ]
+    }
+  ],
+  "contributorsPerLine": 7
+}

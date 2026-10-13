@@ -8,6 +8,7 @@
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D22.0.0-34D399?style=flat-square&logo=node.js" alt="Node Version"/></a>
   <a href="https://nixos.org"><img src="https://img.shields.io/badge/nix-flake%20ready-5277C3?style=flat-square&logo=nixos" alt="Nix Flake"/></a>
   <a href="https://grammy.dev"><img src="https://img.shields.io/badge/bot%20framework-grammY-24A1DE?style=flat-square&logo=telegram" alt="grammY"/></a>
+  <a href="#-contributors"><img src="https://img.shields.io/badge/all_contributors-2-orange.svg?style=flat-square" alt="All Contributors: 2"/></a>
 </p>
 
 ---
@@ -179,8 +180,21 @@ systemd.user.services.dsh-telegram = {
 
 ## 👥 Contributors
 
-- **Sajjad** ([@surtr85](https://github.com/surtr85)) - Creator & Maintainer
-- **DeepSeek Harness (DSH)** ([@deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)) - AI Autonomous Pair Programmer & Architecture Co-Designer
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/surtr85"><img src="https://github.com/surtr85.png" width="100px;" alt="Sajjad"/><br /><sub><b>Sajjad</b></sub></a><br /><a href="https://github.com/surtr85/dsh-telegram/commits?author=surtr85" title="Code">💻</a> <a href="#maintenance" title="Maintenance">🚧</a> <a href="#design" title="Design">🎨</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/deepseek-ai/deepseek-harness"><img src="https://github.com/deepseek-ai.png" width="100px;" alt="DeepSeek Harness"/><br /><sub><b>DeepSeek Harness (DSH)</b></sub></a><br /><a href="https://github.com/deepseek-ai/deepseek-harness" title="Code">💻</a> <a href="https://github.com/deepseek-ai/deepseek-harness" title="Architecture & Ideas">📐</a> <a href="https://github.com/deepseek-ai/deepseek-harness" title="Autonomous Agent">🤖</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+<!-- ALL-CONTRIBUTORS-LIST:END -->
 
 ---
 
