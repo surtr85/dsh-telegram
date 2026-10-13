@@ -30374,6 +30374,9 @@ var TelegramBridge = class {
     const sessionId = await this.resolveSession();
     return { sessionId };
   }
+  isThreadedChat(ctx) {
+    return Boolean(ctx.chat?.is_forum) || Boolean(this.bot.botInfo?.has_topics_enabled);
+  }
   async syncTopicTitleIfChanged(sessionId, chatId, topicId) {
     if (!topicId) return;
     try {
@@ -30427,7 +30430,7 @@ var TelegramBridge = class {
     });
     this.bot.command("new", async (ctx) => {
       try {
-        const isForum = Boolean(ctx.chat?.is_forum);
+        const isForum = this.isThreadedChat(ctx);
         if (isForum) {
           const title = `Session ${(/* @__PURE__ */ new Date()).toISOString().slice(11, 19)}`;
           const waitMsg = await ctx.reply("\u2728 Creating new DSH session and forum topic...", {
@@ -30662,7 +30665,7 @@ Session turn <code>${sessionId}</code> has been canceled.`,
         const cleanTitle = formatTopicTitle(rawTitle);
         const { sessionId, topicId } = await this.resolveSessionForContext(ctx);
         await this.dsh.renameSession(sessionId, cleanTitle);
-        if (topicId && ctx.chat?.is_forum) {
+        if (topicId && this.isThreadedChat(ctx)) {
           await ctx.api.editForumTopic(ctx.chat.id, topicId, { name: cleanTitle }).catch((err) => {
             console.warn("[Bridge] editForumTopic failed:", err.message);
           });
@@ -30937,7 +30940,7 @@ ${escapeHtml(result.text)}`,
   setupMessageHandler() {
     this.bot.on(["message:text", "message:photo", "message:document"], async (ctx) => {
       if (ctx.message.text?.startsWith("/") || ctx.message.caption?.startsWith("/")) return;
-      const isForum = Boolean(ctx.chat?.is_forum);
+      const isForum = this.isThreadedChat(ctx);
       let messageThreadId = ctx.message.message_thread_id;
       let sessionId;
       if (isForum && !messageThreadId) {

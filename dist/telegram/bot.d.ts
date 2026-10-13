@@ -19,6 +19,7 @@ export declare class TelegramBridge {
     private setupMiddleware;
     private resolveSession;
     private resolveSessionForContext;
+    private isThreadedChat;
     private syncTopicTitleIfChanged;
     private setupCommands;
     private enqueueSessionTurn;
