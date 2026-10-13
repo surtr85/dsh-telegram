@@ -1,13 +1,35 @@
 {
   "name": "dsh-telegram",
   "version": "1.0.0",
-  "description": "High-performance Telegram Bridge for DeepSeek Harness (DSH)",
+  "description": "High-performance multimodal Telegram gateway and remote control plane for DeepSeek Harness (DSH)",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "dsh-telegram": "dist/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/surtr85/dsh-telegram.git"
+  },
+  "homepage": "https://github.com/surtr85/dsh-telegram#readme",
+  "bugs": {
+    "url": "https://github.com/surtr85/dsh-telegram/issues"
+  },
+  "author": "Sajjad <surtr85>",
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "telegram-bot",
+    "ai-agent",
+    "coding-agent",
+    "grammy",
+    "nixos-flake"
+  ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "tsx src/index.ts"
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "@grammyjs/auto-retry": "^2.0.2",

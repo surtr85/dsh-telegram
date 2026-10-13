@@ -175,6 +175,7 @@ export class TelegramBridge {
           `• <code>/sessions</code> - Browse & switch between recent sessions\n` +
           `• <code>/attach</code> - Attach to active Web GUI session\n` +
           `• <code>/model</code> - Select model & reasoning effort\n` +
+          `• <code>/compact</code> - Compact and summarize session history\n` +
           `• <code>/rename &lt;title&gt;</code> - Rename current session\n` +
           `• <code>/stop</code> - Abort running turn or tool`;
 
@@ -393,6 +394,41 @@ export class TelegramBridge {
         await ctx.reply(`❌ Error renaming session: ${escapeHtml(err.message)}`, {
           parse_mode: "HTML"
         });
+      }
+    });
+
+    // /compact
+    this.bot.command("compact", async (ctx) => {
+      const sessionId = await this.resolveSession();
+      const waitMsg = await ctx.reply("🧹 <i>Running session context compaction in DSH...</i>", {
+        parse_mode: "HTML"
+      });
+      try {
+        const res = await this.dsh.executeCommand(sessionId, "/compact");
+        const result = res?.result;
+        if (result?.kind === "error") {
+          await ctx.api.editMessageText(
+            ctx.chat.id,
+            waitMsg.message_id,
+            `⚠️ <b>Compaction Unavailable:</b>\n${escapeHtml(result.text)}`,
+            { parse_mode: "HTML" }
+          );
+        } else {
+          const detail = result?.text || "Session history compacted successfully.";
+          await ctx.api.editMessageText(
+            ctx.chat.id,
+            waitMsg.message_id,
+            `✨ <b>Context Compaction Complete</b>\n\n📌 <code>${escapeHtml(detail)}</code>\n🆔 <code>${sessionId}</code>`,
+            { parse_mode: "HTML" }
+          );
+        }
+      } catch (err: any) {
+        await ctx.api.editMessageText(
+          ctx.chat.id,
+          waitMsg.message_id,
+          `❌ <b>Compaction Error:</b> <code>${escapeHtml(err.message)}</code>`,
+          { parse_mode: "HTML" }
+        );
       }
     });
 
@@ -1212,6 +1248,7 @@ export class TelegramBridge {
         { command: "sessions", description: "List and switch sessions" },
         { command: "attach", description: "Attach to active Web GUI session" },
         { command: "model", description: "Select model and reasoning effort" },
+        { command: "compact", description: "Compact and summarize session history" },
         { command: "rename", description: "Rename active session" },
         { command: "stop", description: "Abort active turn or tool" }
       ]);

@@ -107,6 +107,15 @@ export interface SessionItem {
   };
 }
 
+export interface CommandExecuteResult {
+  commandId: string;
+  result?: {
+    kind: "success" | "error" | string;
+    text: string;
+    sourceEventSeq?: number;
+  };
+}
+
 export interface StreamEventHandlers {
   onAssistantTextChunk?: (chunk: string) => void;
   onAssistantMessage?: (text: string, isFinal: boolean) => void;
@@ -258,6 +267,14 @@ export class DshClient {
       request: {
         sessionId
       }
+    });
+  }
+
+  public async executeCommand(sessionId: string, line: string): Promise<CommandExecuteResult> {
+    return await this.rpcCall<CommandExecuteResult>("commands/execute", {
+      agentId: sessionId,
+      line,
+      submittedAttachments: []
     });
   }
 
