@@ -314,7 +314,8 @@ export class TelegramBridge {
                     await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, chunk, {
                       parse_mode: "HTML"
                     });
-                  } catch {
+                  } catch (err: any) {
+                    console.error("[Edit HTML Error]:", err.message);
                     await ctx.api
                       .editMessageText(ctx.chat.id, statusMsg.message_id, stripHtml(chunk))
                       .catch(() => {});
@@ -322,7 +323,8 @@ export class TelegramBridge {
                 } else {
                   try {
                     await ctx.reply(chunk, { parse_mode: "HTML" });
-                  } catch {
+                  } catch (err: any) {
+                    console.error("[Reply HTML Error]:", err.message);
                     await ctx.reply(stripHtml(chunk)).catch(() => {});
                   }
                 }
