@@ -4,7 +4,7 @@ import { Bot, InlineKeyboard, InputFile } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { AppConfig } from "../config.js";
-import { DshClient, PromptContentPart } from "../dsh/client.js";
+import { DshClient, PromptContentPart, ModelCatalogEntry } from "../dsh/client.js";
 import {
   formatToTelegramHtml,
   stripHtml,
@@ -17,6 +17,26 @@ function escapeHtml(str: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function formatTokens(count: number): string {
+  if (count >= 1_000_000) {
+    return `${(count / 1_000_000).toFixed(1)}M`;
+  }
+  if (count >= 1_000) {
+    return `${(count / 1_000).toFixed(1)}K`;
+  }
+  return count.toLocaleString();
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
 }
 
 interface MediaGroupItem {
@@ -143,20 +163,20 @@ export class TelegramBridge {
         const model = current?.projections?.values?.modelSelection?.lastUsed?.model || "Standard";
 
         const text =
-          `🤖 <b>DeepSeek Harness (DSH) Bridge Connected</b>\n\n` +
+          `🤖 <b>DeepSeek Harness (DSH) Telegram Bridge</b>\n\n` +
           `📌 <b>Current Session:</b> ${escapeHtml(title)}\n` +
           `🆔 <code>${sessionId}</code>\n` +
           `🧠 <b>Model:</b> <code>${escapeHtml(model)}</code>\n\n` +
           `<b>Commands & Capabilities:</b>\n` +
-          `• 💬 ارسال متن، تصویر، اسکرین‌شات یا کدهای متنی (Python, JS, TS, JSON, ...)\n` +
-          `• 🖼 دریافت پاسخ‌های غنی با مدیا، بلوک‌های کد و آلبوم تصاویر\n` +
-          `• <code>/new</code> - ایجاد سشن کاری جدید\n` +
-          `• <code>/session</code> - نمایش وضعیت، مسیر کاری و توکن‌های سشن\n` +
-          `• <code>/sessions</code> - مشاهده سشن‌های اخیر و سوییچ سریع\n` +
-          `• <code>/attach</code> - اتصال مجدد به آخرین سشن فعال Web GUI\n` +
-          `• <code>/model</code> - مشاهده و انتخاب مدل هوش مصنوعی\n` +
-          `• <code>/rename &lt;عنوان&gt;</code> - تغییر نام سشن جاری\n` +
-          `• <code>/stop</code> - توقف فوری فرآیند در حال اجرا`;
+          `• 💬 Send text prompts, photos, or code files (.ts, .py, .json, ...)\n` +
+          `• 🖼 Receive rich media, code blocks, and formatted albums\n` +
+          `• <code>/new</code> - Start a brand new session\n` +
+          `• <code>/stats</code> - Comprehensive session statistics & token metrics\n` +
+          `• <code>/sessions</code> - Browse & switch between recent sessions\n` +
+          `• <code>/attach</code> - Attach to active Web GUI session\n` +
+          `• <code>/model</code> - Select model & reasoning effort\n` +
+          `• <code>/rename &lt;title&gt;</code> - Rename current session\n` +
+          `• <code>/stop</code> - Abort running turn or tool`;
 
         await ctx.reply(text, { parse_mode: "HTML" });
       } catch (err: any) {
@@ -182,11 +202,14 @@ export class TelegramBridge {
       }
     });
 
-    // /session or /status
-    this.bot.command(["session", "status"], async (ctx) => {
+    // /stats (and aliases /session, /status)
+    this.bot.command(["stats", "session", "status"], async (ctx) => {
       try {
         const sessionId = await this.resolveSession();
-        const sessions = await this.dsh.listSessions();
+        const [sessions, projections] = await Promise.all([
+          this.dsh.listSessions(),
+          this.dsh.getSessionProjections(sessionId)
+        ]);
         const current = sessions.find((s) => s.sessionId === sessionId);
 
         if (!current) {
@@ -196,21 +219,68 @@ export class TelegramBridge {
           return;
         }
 
-        const vals = current.projections?.values;
+        const vals = projections?.values || current.projections?.values;
         const title = vals?.title || "Untitled Session";
-        const seq = current.projections?.asOfSeq || 0;
+        const cwd = current.cwd || this.config.defaultCwd;
+        const modelSel = vals?.modelSelection?.lastUsed || vals?.modelSelection?.next;
+        const stats = vals?.sessionStats;
+        const context = vals?.contextPressure;
+        const breakdown = vals?.contextBreakdown;
+        const tokenUsage = vals?.tokenUsage;
+
+        // Context Pressure
+        let contextLine = "N/A";
+        if (context && context.contextWindow > 0) {
+          const pct = Math.round((context.pressureTokens / context.contextWindow) * 100);
+          contextLine = `${pct}% used (~${formatTokens(context.pressureTokens)} / ${formatTokens(context.contextWindow)})`;
+        }
+
+        // Token usage & cache hit ratio
+        const uncached = tokenUsage?.uncachedInputTokens ?? 0;
+        const cached = tokenUsage?.cacheReadTokens ?? 0;
+        const output = tokenUsage?.outputTokens ?? 0;
+        const totalInput = uncached + cached;
+        const cacheHitRatio = totalInput > 0 ? ((cached / totalInput) * 100).toFixed(1) : "0.0";
+
+        // Speed & Latency
+        let decodeSpeed = "N/A";
+        if (stats && stats.decodeMs > 0 && stats.decodeTokens > 0) {
+          const speed = Math.round(stats.decodeTokens / (stats.decodeMs / 1000));
+          decodeSpeed = `${speed} tok/s`;
+        }
+
+        let avgTtft = "N/A";
+        if (stats && stats.ttftSteps > 0 && stats.ttftMs > 0) {
+          avgTtft = formatDuration(stats.ttftMs / stats.ttftSteps);
+        }
+
+        const effortLabel = modelSel?.reasoningEffort ? ` (Effort: <i>${escapeHtml(modelSel.reasoningEffort)}</i>)` : "";
 
         const info =
-          `📊 <b>Session Details</b>\n\n` +
+          `📊 <b>Session Statistics & Metrics</b>\n\n` +
           `📌 <b>Title:</b> ${escapeHtml(title)}\n` +
           `🆔 <code>${sessionId}</code>\n` +
+          `🤖 <b>Model:</b> <code>${escapeHtml(modelSel?.model || "Standard")}</code>${effortLabel}\n` +
           `🔄 <b>Status:</b> ${current.running ? "⏳ Busy / Running" : "💤 Idle"}\n` +
-          `📈 <b>Events Seq:</b> ${seq}\n` +
-          `📁 <b>CWD:</b> <code>${escapeHtml(current.cwd || this.config.defaultCwd)}</code>`;
+          `📁 <b>CWD:</b> <code>${escapeHtml(cwd)}</code>\n\n` +
+          `🧠 <b>Context Window:</b> <code>${contextLine}</code>\n` +
+          `├ ⚙️ <b>System Prompt:</b> ~${formatTokens(breakdown?.systemTokens ?? 0)}\n` +
+          `├ 🛠 <b>Tool Definitions:</b> ~${formatTokens(breakdown?.toolsTokens ?? 0)}\n` +
+          `└ 💬 <b>Messages:</b> ~${formatTokens(breakdown?.messageTokens ?? 0)}\n\n` +
+          `⏱ <b>Performance:</b>\n` +
+          `├ ⏳ <b>LLM Wall Time:</b> ${stats ? formatDuration(stats.llmMs) : "0s"}\n` +
+          `├ 🔧 <b>Tool Wall Time:</b> ${stats ? formatDuration(stats.toolMs) : "0s"}\n` +
+          `├ ⚡ <b>Avg TTFT:</b> ${avgTtft}\n` +
+          `└ 🚀 <b>Decode Speed:</b> ${decodeSpeed}\n\n` +
+          `📈 <b>Token Usage & Cache:</b>\n` +
+          `├ 🎯 <b>Cache Hit:</b> ${cacheHitRatio}%\n` +
+          `├ 📥 <b>Uncached Input:</b> ${uncached.toLocaleString()} tok\n` +
+          `├ 💾 <b>Cached Input:</b> ${cached.toLocaleString()} tok\n` +
+          `└ 📤 <b>Output:</b> ${output.toLocaleString()} tok`;
 
         await ctx.reply(info, { parse_mode: "HTML" });
       } catch (err: any) {
-        await ctx.reply(`❌ Error getting session: ${err.message}`);
+        await ctx.reply(`❌ Error retrieving session statistics: ${err.message}`);
       }
     });
 
@@ -292,11 +362,11 @@ export class TelegramBridge {
         }
         await this.dsh.cancelSession(sessionId);
         await ctx.reply(
-          `🛑 <b>فرمان توقف ارسال شد.</b>\nعملیات جاری سشن <code>${sessionId}</code> متوقف شد.`,
+          `🛑 <b>Stop Command Dispatched</b>\nSession turn <code>${sessionId}</code> has been canceled.`,
           { parse_mode: "HTML" }
         );
       } catch (err: any) {
-        await ctx.reply(`❌ خطا در لغو عملیات: ${escapeHtml(err.message)}`, {
+        await ctx.reply(`❌ Error canceling session: ${escapeHtml(err.message)}`, {
           parse_mode: "HTML"
         });
       }
@@ -307,7 +377,7 @@ export class TelegramBridge {
       const newTitle = ctx.match?.trim();
       if (!newTitle) {
         await ctx.reply(
-          "📌 لطفاً عنوان جدید را مشخص کنید:\nمثال: <code>/rename پروژه جدید من</code>",
+          "📌 Please specify a new title:\nExample: <code>/rename My Project Name</code>",
           { parse_mode: "HTML" }
         );
         return;
@@ -316,11 +386,11 @@ export class TelegramBridge {
         const sessionId = await this.resolveSession();
         await this.dsh.renameSession(sessionId, newTitle);
         await ctx.reply(
-          `✏️ <b>عنوان سشن تغییر یافت:</b>\n📌 ${escapeHtml(newTitle)}\n🆔 <code>${sessionId}</code>`,
+          `✏️ <b>Session Renamed</b>\n📌 <b>Title:</b> ${escapeHtml(newTitle)}\n🆔 <code>${sessionId}</code>`,
           { parse_mode: "HTML" }
         );
       } catch (err: any) {
-        await ctx.reply(`❌ خطا در تغییر نام سشن: ${escapeHtml(err.message)}`, {
+        await ctx.reply(`❌ Error renaming session: ${escapeHtml(err.message)}`, {
           parse_mode: "HTML"
         });
       }
@@ -330,21 +400,54 @@ export class TelegramBridge {
     this.bot.command("model", async (ctx) => {
       try {
         const sessionId = await this.resolveSession();
-        const sessions = await this.dsh.listSessions();
+        const [sessions, catalog] = await Promise.all([
+          this.dsh.listSessions(),
+          this.dsh.getModelCatalog()
+        ]);
         const current = sessions.find((s) => s.sessionId === sessionId);
         const activeModel =
           current?.projections?.values?.modelSelection?.lastUsed ||
-          current?.projections?.values?.modelSelection?.next;
+          current?.projections?.values?.modelSelection?.next ||
+          catalog.default;
 
-        const catalog = await this.dsh.getModelCatalog();
-        this.modelCatalogCache = [];
         const keyboard = new InlineKeyboard();
+        this.modelCatalogCache = [];
+
+        // Find the current model entry in catalog to see its supported reasoning efforts
+        let currentModelEntry: ModelCatalogEntry | undefined;
+        for (const group of catalog.groups) {
+          for (const m of group.models) {
+            if (group.id === activeModel.provider && m.id === activeModel.model) {
+              currentModelEntry = m;
+              break;
+            }
+          }
+          if (currentModelEntry) break;
+        }
+
+        const currentEffort = activeModel.reasoningEffort || currentModelEntry?.reasoning?.defaultEffort || "default";
 
         let text =
-          `🧠 <b>مدیریت مدل هوش مصنوعی</b>\n\n` +
-          `📌 <b>مدل جاری سشن:</b> <code>${escapeHtml(activeModel?.model || catalog.default?.model || "نامشخص")}</code>\n` +
-          `🏢 <b>سرویس‌دهنده:</b> <code>${escapeHtml(activeModel?.provider || catalog.default?.provider || "پیش‌فرض")}</code>\n\n` +
-          `برای تغییر مدل، یکی از گزینه‌های زیر را انتخاب کنید:\n`;
+          `🧠 <b>AI Model & Reasoning Selection</b>\n\n` +
+          `📌 <b>Active Model:</b> <code>${escapeHtml(activeModel.model)}</code>\n` +
+          `🏢 <b>Provider:</b> <code>${escapeHtml(activeModel.provider)}</code>\n` +
+          `⚡ <b>Current Effort:</b> <code>${escapeHtml(currentEffort)}</code>\n\n`;
+
+        // If current model supports reasoning efforts, show effort buttons!
+        if (currentModelEntry?.reasoning?.efforts && currentModelEntry.reasoning.efforts.length > 0) {
+          text += `<b>Adjust Reasoning Effort:</b>\n`;
+          for (const eff of currentModelEntry.reasoning.efforts) {
+            const isSelected = eff.id === currentEffort;
+            keyboard.text(
+              `${isSelected ? "✅ " : ""}${eff.name}`,
+              `eff:${eff.id}`
+            );
+          }
+          keyboard.row();
+          text += `\n<b>Switch Model:</b>\n`;
+        } else {
+          text += `<b>Available Models:</b>\n`;
+        }
 
         let counter = 0;
         for (const group of catalog.groups) {
@@ -358,7 +461,7 @@ export class TelegramBridge {
             const isCurrent =
               activeModel?.provider === group.id && activeModel?.model === m.id;
             keyboard.text(
-              `${isCurrent ? "✅ " : ""}${m.name.slice(0, 24)}`,
+              `${isCurrent ? "👉 " : ""}${m.name.slice(0, 22)}`,
               `mdl:${idx}`
             );
             counter++;
@@ -371,7 +474,7 @@ export class TelegramBridge {
           reply_markup: keyboard
         });
       } catch (err: any) {
-        await ctx.reply(`❌ خطا در دریافت کاتالوگ مدل‌ها: ${escapeHtml(err.message)}`, {
+        await ctx.reply(`❌ Error loading model catalog: ${escapeHtml(err.message)}`, {
           parse_mode: "HTML"
         });
       }
@@ -382,26 +485,142 @@ export class TelegramBridge {
       const idx = parseInt(ctx.match[1], 10);
       const selected = this.modelCatalogCache[idx];
       if (!selected) {
-        await ctx.answerCallbackQuery({ text: "مدل یافت نشد یا منقضی شده است." });
+        await ctx.answerCallbackQuery({ text: "Model not found or selection expired." });
         return;
       }
 
       try {
         const sessionId = await this.resolveSession();
-        await this.dsh.selectModel(sessionId, selected.provider, selected.model);
+        const catalog = await this.dsh.getModelCatalog();
+
+        let targetEntry: ModelCatalogEntry | undefined;
+        for (const group of catalog.groups) {
+          if (group.id === selected.provider) {
+            targetEntry = group.models.find((m) => m.id === selected.model);
+            if (targetEntry) break;
+          }
+        }
+
+        const defaultEffort = targetEntry?.reasoning?.defaultEffort;
+        await this.dsh.selectModel(
+          sessionId,
+          selected.provider,
+          selected.model,
+          defaultEffort
+        );
+
         await ctx.answerCallbackQuery({
-          text: `مدل به ${selected.name} تغییر یافت.`
+          text: `Switched to ${selected.name}`
         });
+
+        const keyboard = new InlineKeyboard();
+        if (targetEntry?.reasoning?.efforts && targetEntry.reasoning.efforts.length > 0) {
+          for (const eff of targetEntry.reasoning.efforts) {
+            const isSelected = eff.id === (defaultEffort || "high");
+            keyboard.text(
+              `${isSelected ? "✅ " : ""}${eff.name}`,
+              `eff:${eff.id}`
+            );
+          }
+          keyboard.row();
+        }
+
+        let counter = 0;
+        for (let i = 0; i < this.modelCatalogCache.length; i++) {
+          const item = this.modelCatalogCache[i];
+          const isCurrent = item.provider === selected.provider && item.model === selected.model;
+          keyboard.text(
+            `${isCurrent ? "👉 " : ""}${item.name.slice(0, 22)}`,
+            `mdl:${i}`
+          );
+          counter++;
+          if (counter % 2 === 0) keyboard.row();
+        }
+
+        const effortStr = defaultEffort ? `\n⚡ <b>Reasoning Effort:</b> <code>${defaultEffort}</code>` : "";
+
         await ctx.editMessageText(
-          `✅ <b>مدل هوش مصنوعی به‌روزرسانی شد</b>\n\n` +
-          `🤖 <b>مدل انتخابی:</b> <code>${escapeHtml(selected.name)}</code>\n` +
-          `🆔 <b>شناسه مدل:</b> <code>${escapeHtml(selected.model)}</code>\n` +
-          `🏢 <b>سرویس‌دهنده:</b> <code>${escapeHtml(selected.provider)}</code>\n` +
-          `📌 <b>سشن:</b> <code>${sessionId}</code>`,
-          { parse_mode: "HTML" }
+          `✅ <b>Model Switched</b>\n\n` +
+          `🤖 <b>Model:</b> <code>${escapeHtml(selected.name)}</code>\n` +
+          `🆔 <b>ID:</b> <code>${escapeHtml(selected.model)}</code>\n` +
+          `🏢 <b>Provider:</b> <code>${escapeHtml(selected.provider)}</code>` +
+          `${effortStr}\n` +
+          `📌 <b>Session:</b> <code>${sessionId}</code>`,
+          { parse_mode: "HTML", reply_markup: keyboard }
         );
       } catch (err: any) {
-        await ctx.answerCallbackQuery({ text: `خطا: ${err.message}` });
+        await ctx.answerCallbackQuery({ text: `Error: ${err.message}` });
+      }
+    });
+
+    // Handle inline button callbacks for reasoning effort adjustment
+    this.bot.callbackQuery(/^eff:([a-z0-9_-]+)$/, async (ctx) => {
+      const targetEffort = ctx.match[1];
+      try {
+        const sessionId = await this.resolveSession();
+        const [sessions, catalog] = await Promise.all([
+          this.dsh.listSessions(),
+          this.dsh.getModelCatalog()
+        ]);
+        const current = sessions.find((s) => s.sessionId === sessionId);
+        const activeModel =
+          current?.projections?.values?.modelSelection?.lastUsed ||
+          current?.projections?.values?.modelSelection?.next ||
+          catalog.default;
+
+        await this.dsh.selectModel(
+          sessionId,
+          activeModel.provider,
+          activeModel.model,
+          targetEffort
+        );
+
+        await ctx.answerCallbackQuery({
+          text: `Reasoning effort set to: ${targetEffort}`
+        });
+
+        let targetEntry: ModelCatalogEntry | undefined;
+        for (const group of catalog.groups) {
+          if (group.id === activeModel.provider) {
+            targetEntry = group.models.find((m) => m.id === activeModel.model);
+            if (targetEntry) break;
+          }
+        }
+
+        const keyboard = new InlineKeyboard();
+        if (targetEntry?.reasoning?.efforts) {
+          for (const eff of targetEntry.reasoning.efforts) {
+            const isSelected = eff.id === targetEffort;
+            keyboard.text(
+              `${isSelected ? "✅ " : ""}${eff.name}`,
+              `eff:${eff.id}`
+            );
+          }
+          keyboard.row();
+        }
+
+        let counter = 0;
+        for (let i = 0; i < this.modelCatalogCache.length; i++) {
+          const item = this.modelCatalogCache[i];
+          const isCurrent = item.provider === activeModel.provider && item.model === activeModel.model;
+          keyboard.text(
+            `${isCurrent ? "👉 " : ""}${item.name.slice(0, 22)}`,
+            `mdl:${i}`
+          );
+          counter++;
+          if (counter % 2 === 0) keyboard.row();
+        }
+
+        await ctx.editMessageText(
+          `✅ <b>Reasoning Effort Updated</b>\n\n` +
+          `🤖 <b>Model:</b> <code>${escapeHtml(activeModel.model)}</code>\n` +
+          `⚡ <b>Effort:</b> <code>${targetEffort}</code>\n` +
+          `🏢 <b>Provider:</b> <code>${escapeHtml(activeModel.provider)}</code>\n` +
+          `📌 <b>Session:</b> <code>${sessionId}</code>`,
+          { parse_mode: "HTML", reply_markup: keyboard }
+        );
+      } catch (err: any) {
+        await ctx.answerCallbackQuery({ text: `Error: ${err.message}` });
       }
     });
   }
@@ -461,7 +680,7 @@ export class TelegramBridge {
           buffer.timer = setTimeout(() => this.processMediaGroup(mediaGroupId), 1000);
         } else {
           const statusMsg = await ctx.reply(
-            "⏳ <i>در حال دریافت آلبوم تصاویر...</i>",
+            "⏳ <i>Receiving image album...</i>",
             {
               parse_mode: "HTML",
               reply_parameters: { message_id: ctx.message.message_id }
@@ -487,13 +706,13 @@ export class TelegramBridge {
         const photos = ctx.message.photo;
         const bestPhoto = photos[photos.length - 1];
         const caption =
-          ctx.message.caption?.trim() || "تصویر ارسالی از تلگرام. لطفاً بررسی و تحلیل کنید.";
+          ctx.message.caption?.trim() || "Telegram image attachment. Please analyze and inspect.";
 
         console.log(
           `[Bridge] Received photo from user ${ctx.from?.id} (caption: "${caption.slice(0, 40)}")`
         );
         const statusMsg = await ctx.reply(
-          "⏳ <i>در حال دریافت و ارسال تصویر به مدل هوش مصنوعی...</i>",
+          "⏳ <i>Uploading image to DSH workspace...</i>",
           {
             parse_mode: "HTML",
             reply_parameters: { message_id: ctx.message.message_id }
@@ -529,7 +748,7 @@ export class TelegramBridge {
           await ctx.api.editMessageText(
             ctx.chat.id,
             statusMsg.message_id,
-            `❌ <b>خطا در دریافت تصویر:</b> <code>${escapeHtml(err.message)}</code>`,
+            `❌ <b>Failed to process image:</b> <code>${escapeHtml(err.message)}</code>`,
             { parse_mode: "HTML" }
           );
         }
@@ -540,12 +759,12 @@ export class TelegramBridge {
       if (ctx.message.document && ctx.message.document.mime_type?.startsWith("image/")) {
         const doc = ctx.message.document;
         const caption =
-          ctx.message.caption?.trim() || "تصویر ارسالی از تلگرام. لطفاً بررسی و تحلیل کنید.";
+          ctx.message.caption?.trim() || "Telegram image attachment. Please analyze and inspect.";
 
         console.log(
           `[Bridge] Received image document from user ${ctx.from?.id} (name: ${doc.file_name})`
         );
-        const statusMsg = await ctx.reply("⏳ <i>در حال دریافت فایل تصویر در DSH...</i>", {
+        const statusMsg = await ctx.reply("⏳ <i>Downloading image document to DSH...</i>", {
           parse_mode: "HTML",
           reply_parameters: { message_id: ctx.message.message_id }
         });
@@ -584,7 +803,7 @@ export class TelegramBridge {
           await ctx.api.editMessageText(
             ctx.chat.id,
             statusMsg.message_id,
-            `❌ <b>خطا در دریافت فایل تصویر:</b> <code>${escapeHtml(err.message)}</code>`,
+            `❌ <b>Failed to download image document:</b> <code>${escapeHtml(err.message)}</code>`,
             { parse_mode: "HTML" }
           );
         }
@@ -600,7 +819,7 @@ export class TelegramBridge {
         console.log(
           `[Bridge] Received document from user ${ctx.from?.id} (name: ${fileName}, mime: ${doc.mime_type})`
         );
-        const statusMsg = await ctx.reply("⏳ <i>در حال دریافت و پردازش سند متنی در DSH...</i>", {
+        const statusMsg = await ctx.reply("⏳ <i>Processing text/code document in DSH...</i>", {
           parse_mode: "HTML",
           reply_parameters: { message_id: ctx.message.message_id }
         });
@@ -620,7 +839,7 @@ export class TelegramBridge {
             await ctx.api.editMessageText(
               ctx.chat.id,
               statusMsg.message_id,
-              `⚠️ فایل <code>${escapeHtml(fileName)}</code> باینری است. لطفاً فایل متنی/کد یا تصویر ارسال کنید.`,
+              `⚠️ File <code>${escapeHtml(fileName)}</code> is binary. Please send a text, code, or image file.`,
               { parse_mode: "HTML" }
             );
             return;
@@ -632,7 +851,7 @@ export class TelegramBridge {
 
           const prompt = caption
             ? `${caption}\n\n[Attached File: ${fileName}]\n\`\`\`\n${maxSnippet}${truncatedNotice}\n\`\`\``
-            : `بررسی فایل ارسالی (${fileName}):\n\`\`\`\n${maxSnippet}${truncatedNotice}\n\`\`\`\nلطفاً این فایل را بررسی کنید.`;
+            : `Attached document (${fileName}):\n\`\`\`\n${maxSnippet}${truncatedNotice}\n\`\`\`\nPlease inspect and analyze this file.`;
 
           await this.enqueueSessionTurn(sessionId, () =>
             this.handleSessionTurn(ctx, sessionId, prompt, statusMsg)
@@ -641,7 +860,7 @@ export class TelegramBridge {
           await ctx.api.editMessageText(
             ctx.chat.id,
             statusMsg.message_id,
-            `❌ <b>خطا در پردازش فایل:</b> <code>${escapeHtml(err.message)}</code>`,
+            `❌ <b>Error processing document:</b> <code>${escapeHtml(err.message)}</code>`,
             { parse_mode: "HTML" }
           );
         }
@@ -673,7 +892,7 @@ export class TelegramBridge {
     this.mediaGroupBuffers.delete(mediaGroupId);
 
     const { ctx, sessionId, items, caption, statusMsg } = buffer;
-    const finalCaption = caption || "تصاویر ارسالی از تلگرام. لطفاً بررسی و تحلیل کنید.";
+    const finalCaption = caption || "Telegram album attachments. Please analyze and inspect.";
 
     console.log(
       `[Bridge] Processing media group ${mediaGroupId} with ${items.length} items (caption: "${finalCaption.slice(0, 40)}")`
@@ -683,7 +902,7 @@ export class TelegramBridge {
       await ctx.api.editMessageText(
         ctx.chat.id,
         statusMsg.message_id,
-        `⏳ <i>در حال دانلود ${items.length} تصویر و ارسال به مدل هوش مصنوعی...</i>`,
+        `⏳ <i>Downloading ${items.length} album images to DSH...</i>`,
         { parse_mode: "HTML" }
       );
 
@@ -728,7 +947,7 @@ export class TelegramBridge {
       await ctx.api.editMessageText(
         ctx.chat.id,
         statusMsg.message_id,
-        `❌ <b>خطا در دریافت آلبوم تصاویر:</b> <code>${escapeHtml(err.message)}</code>`,
+        `❌ <b>Error processing image album:</b> <code>${escapeHtml(err.message)}</code>`,
         { parse_mode: "HTML" }
       );
     }
@@ -765,7 +984,7 @@ export class TelegramBridge {
 
       this.activeTurns.set(sessionId, {
         abort: () => {
-          scheduleEdit("🛑 <b>عملیات لغو شد.</b>", true);
+          scheduleEdit("🛑 <b>Session turn canceled.</b>", true);
           finish();
         },
         statusMsgId: statusMsg.message_id,
@@ -987,14 +1206,14 @@ export class TelegramBridge {
 
     try {
       await this.bot.api.setMyCommands([
-        { command: "start", description: "راهنما و وضعیت" },
-        { command: "new", description: "ایجاد سشن جدید" },
-        { command: "session", description: "مشخصات و توکن‌های سشن جاری" },
-        { command: "sessions", description: "لیست و سوییچ بین سشن‌ها" },
-        { command: "attach", description: "اتصال به سشن فعال Web GUI" },
-        { command: "model", description: "مشاهده و تغییر مدل هوش مصنوعی" },
-        { command: "rename", description: "تغییر نام سشن جاری" },
-        { command: "stop", description: "توقف فوری عملیات جاری" }
+        { command: "start", description: "Overview and status" },
+        { command: "new", description: "Create a new session" },
+        { command: "stats", description: "Session metrics, latency & token cache" },
+        { command: "sessions", description: "List and switch sessions" },
+        { command: "attach", description: "Attach to active Web GUI session" },
+        { command: "model", description: "Select model and reasoning effort" },
+        { command: "rename", description: "Rename active session" },
+        { command: "stop", description: "Abort active turn or tool" }
       ]);
       console.log("[Bridge] Telegram bot commands registered successfully.");
     } catch (err: any) {

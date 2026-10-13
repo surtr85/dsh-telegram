@@ -12,34 +12,6 @@ export type PromptContentPart =
       name?: string;
     };
 
-export interface SessionItem {
-  sessionId: string;
-  updatedAt: number;
-  agentAvailable: boolean;
-  running: boolean;
-  blank: boolean;
-  cwd?: string;
-  projections?: {
-    kind: string;
-    asOfSeq: number;
-    values?: {
-      title?: string | null;
-      goal?: any;
-      tokenUsage?: {
-        uncachedInputTokens: number;
-        outputTokens: number;
-        cacheReadTokens: number;
-        cacheWriteTokens: number;
-      };
-      modelSelection?: {
-        lastUsed?: { provider: string; model: string };
-        next?: { provider: string; model: string };
-      };
-      turnOutline?: Array<{ turn: number; label: string }>;
-    };
-  };
-}
-
 export interface ModelEffort {
   id: string;
   name: string;
@@ -68,9 +40,71 @@ export interface ModelCatalog {
   default: {
     provider: string;
     model: string;
+    reasoningEffort?: string;
   };
   routableProviders: string[];
   groups: ModelProviderGroup[];
+}
+
+export interface SessionStatsProjection {
+  turns: number;
+  steps: number;
+  llmMs: number;
+  toolMs: number;
+  ttftMs: number;
+  ttftSteps: number;
+  decodeMs: number;
+  decodeTokens: number;
+}
+
+export interface ContextPressureProjection {
+  pressureTokens: number;
+  projectedTokens: number;
+  contextWindow: number;
+}
+
+export interface ContextBreakdownProjection {
+  systemTokens: number;
+  toolsTokens: number;
+  messageTokens: number;
+}
+
+export interface SessionProjectionValues {
+  title?: string | null;
+  sessionStats?: SessionStatsProjection;
+  contextPressure?: ContextPressureProjection;
+  contextBreakdown?: ContextBreakdownProjection;
+  tokenUsage?: {
+    uncachedInputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  };
+  modelSelection?: {
+    lastUsed?: { provider: string; model: string; reasoningEffort?: string };
+    next?: { provider: string; model: string; reasoningEffort?: string };
+  };
+  turnOutline?: Array<{ turn: number; label: string }>;
+  [key: string]: any;
+}
+
+export interface SessionProjectionsResult {
+  asOfSeq: number;
+  values: SessionProjectionValues;
+}
+
+export interface SessionItem {
+  sessionId: string;
+  updatedAt: number;
+  agentAvailable: boolean;
+  running: boolean;
+  blank: boolean;
+  cwd?: string;
+  projections?: {
+    kind: string;
+    asOfSeq: number;
+    values?: SessionProjectionValues;
+  };
 }
 
 export interface StreamEventHandlers {
@@ -215,6 +249,14 @@ export class DshClient {
       request: {
         sessionId,
         title
+      }
+    });
+  }
+
+  public async getSessionProjections(sessionId: string): Promise<SessionProjectionsResult | null> {
+    return await this.rpcCall<SessionProjectionsResult | null>("session/projections", {
+      request: {
+        sessionId
       }
     });
   }
