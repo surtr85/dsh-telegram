@@ -177,6 +177,13 @@ systemd.user.services.dsh-telegram = {
 
 ---
 
+## 👥 Contributors
+
+- **Sajjad** ([@surtr85](https://github.com/surtr85)) - Creator & Maintainer
+- **DeepSeek Harness (DSH)** - AI Autonomous Pair Programmer & Architecture Co-Designer
+
+---
+
 ## 📄 License
 
 MIT © [Sajjad (surtr85)](https://github.com/surtr85)
