@@ -12,7 +12,7 @@
 
 ---
 
-**`dsh-telegram`** is a high-performance, multimodal Telegram gateway and remote control plane for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai) AI coding agents.
+**`dsh-telegram`** is a high-performance, multimodal Telegram gateway and remote control plane for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) AI coding agents.
 
 It allows you to supervise, guide, inspect, and prompt your local DeepSeek Harness agent sessions directly from your phone or desktop via Telegram with low latency, full telemetry, and bidirectional multimodal image & file streaming.
 
@@ -180,7 +180,7 @@ systemd.user.services.dsh-telegram = {
 ## 👥 Contributors
 
 - **Sajjad** ([@surtr85](https://github.com/surtr85)) - Creator & Maintainer
-- **DeepSeek Harness (DSH)** - AI Autonomous Pair Programmer & Architecture Co-Designer
+- **DeepSeek Harness (DSH)** ([@deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)) - AI Autonomous Pair Programmer & Architecture Co-Designer
 
 ---
 
