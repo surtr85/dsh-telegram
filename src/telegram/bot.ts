@@ -67,6 +67,8 @@ export class TelegramBridge {
   private currentSessionId: string | null = null;
   private sessionStateFile: string;
   private topicStore: TopicStore;
+  private workspaceStateFile: string;
+  private activeCwd: string;
   private mediaGroupBuffers = new Map<string, MediaGroupBuffer>();
   private sessionLocks = new Map<string, Promise<void>>();
   private processedMessageIds = new Set<number>();
@@ -77,14 +79,111 @@ export class TelegramBridge {
     this.config = config;
     this.dsh = dshClient;
     this.bot = new Bot(config.telegramToken);
-    this.sessionStateFile = path.join(config.defaultCwd, ".dsh-session");
-    this.topicStore = new TopicStore(path.join(config.defaultCwd, ".dsh-topics.json"));
+
+    const homeDir = process.env.HOME || "/home/amadeus";
+    const dshDir = path.join(homeDir, ".dsh");
+    const stateDir = fs.existsSync(dshDir) ? dshDir : config.defaultCwd;
+
+    this.sessionStateFile = fs.existsSync(path.join(config.defaultCwd, ".dsh-session"))
+      ? path.join(config.defaultCwd, ".dsh-session")
+      : path.join(stateDir, ".dsh-session");
+
+    this.topicStore = new TopicStore(
+      fs.existsSync(path.join(config.defaultCwd, ".dsh-topics.json"))
+        ? path.join(config.defaultCwd, ".dsh-topics.json")
+        : path.join(stateDir, ".dsh-topics.json")
+    );
+
+    this.workspaceStateFile = fs.existsSync(path.join(config.defaultCwd, ".dsh-workspace"))
+      ? path.join(config.defaultCwd, ".dsh-workspace")
+      : path.join(stateDir, ".dsh-workspace");
+
+    this.activeCwd = this.loadPersistedWorkspace();
 
     this.loadPersistedSession();
     this.setupPlugins();
     this.setupMiddleware();
     this.setupCommands();
     this.setupMessageHandler();
+  }
+
+  private loadPersistedWorkspace(): string {
+    try {
+      if (fs.existsSync(this.workspaceStateFile)) {
+        const dir = fs.readFileSync(this.workspaceStateFile, "utf8").trim();
+        if (dir && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+          console.log(`[Bridge] Restored active workspace from file: ${dir}`);
+          return dir;
+        }
+      }
+    } catch {}
+
+    if (process.env.DSH_DEFAULT_CWD && fs.existsSync(process.env.DSH_DEFAULT_CWD)) {
+      return process.env.DSH_DEFAULT_CWD;
+    }
+
+    if (fs.existsSync("/home/amadeus/Projects/nix-config")) {
+      return "/home/amadeus/Projects/nix-config";
+    }
+
+    return this.config.defaultCwd;
+  }
+
+  public setActiveCwd(newCwd: string): void {
+    this.activeCwd = newCwd;
+    try {
+      fs.writeFileSync(this.workspaceStateFile, newCwd.trim(), "utf8");
+      console.log(`[Bridge] Persisted active workspace: ${newCwd}`);
+    } catch (err: any) {
+      console.warn("[Bridge] Failed to persist active workspace:", err.message);
+    }
+  }
+
+  public getActiveCwd(): string {
+    return this.activeCwd;
+  }
+
+  private async listAvailableWorkspaces(): Promise<string[]> {
+    const candidates = new Set<string>();
+
+    if (this.getActiveCwd()) candidates.add(this.getActiveCwd());
+    if (this.config.defaultCwd) candidates.add(this.config.defaultCwd);
+
+    const homeDir = process.env.HOME || "/home/amadeus";
+    const projectsDir = path.join(homeDir, "Projects");
+    if (fs.existsSync(projectsDir)) {
+      candidates.add(projectsDir);
+      try {
+        const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+            const fullPath = path.join(projectsDir, entry.name);
+            candidates.add(fullPath);
+            if (entry.name === "workspace") {
+              try {
+                const subEntries = fs.readdirSync(fullPath, { withFileTypes: true });
+                for (const sub of subEntries) {
+                  if (sub.isDirectory() && !sub.name.startsWith(".")) {
+                    candidates.add(path.join(fullPath, sub.name));
+                  }
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+    }
+
+    try {
+      const sessions = await this.dsh.listSessions();
+      for (const s of sessions) {
+        if (s.cwd && fs.existsSync(s.cwd)) {
+          candidates.add(s.cwd);
+        }
+      }
+    } catch {}
+
+    return Array.from(candidates).sort();
   }
 
   private loadPersistedSession() {
@@ -143,7 +242,15 @@ export class TelegramBridge {
 
   private async resolveSession(): Promise<string> {
     if (this.currentSessionId) {
-      return this.currentSessionId;
+      try {
+        const sessions = await this.dsh.listSessions();
+        if (sessions.some((s) => s.sessionId === this.currentSessionId)) {
+          return this.currentSessionId;
+        }
+      } catch (err: any) {
+        console.warn("[Bridge] listSessions error in resolveSession:", err.message);
+        return this.currentSessionId;
+      }
     }
 
     const active = await this.dsh.getActiveSession();
@@ -152,7 +259,7 @@ export class TelegramBridge {
       return active.sessionId;
     }
 
-    const created = await this.dsh.createSession();
+    const created = await this.dsh.createSession(this.getActiveCwd());
     this.persistSession(created.sessionId);
     return created.sessionId;
   }
@@ -168,7 +275,7 @@ export class TelegramBridge {
         return { sessionId: binding.sessionId, topicId: messageThreadId };
       }
       // Auto-bind unmapped topic to a new session
-      const created = await this.dsh.createSession();
+      const created = await this.dsh.createSession(this.getActiveCwd());
       const title = formatTopicTitle(ctx.message?.text || `Topic ${messageThreadId}`);
       this.topicStore.setBinding(ctx.chat.id, messageThreadId, created.sessionId, title);
       await this.dsh.renameSession(created.sessionId, title).catch(() => {});
@@ -217,15 +324,17 @@ export class TelegramBridge {
           `🤖 <b>DeepSeek Harness (DSH) Telegram Bridge</b>\n\n` +
           `📌 <b>Current Session:</b> ${escapeHtml(title)}\n` +
           `🆔 <code>${sessionId}</code>\n` +
+          `📁 <b>Active Workspace:</b> <code>${escapeHtml(this.getActiveCwd())}</code>\n` +
           `🧠 <b>Model:</b> <code>${escapeHtml(model)}</code>\n\n` +
           `<b>Commands & Capabilities:</b>\n` +
           `• 💬 Send text prompts, photos, or code files (.ts, .py, .json, ...)\n` +
           `• 🧵 <b>Forum Topics:</b> Each topic routes to an isolated DSH session\n` +
           `• 🖼 Receive rich media, code blocks, and formatted albums\n` +
-          `• <code>/new</code> - Start a brand new session / topic\n` +
-          `• <code>/stats</code> - Comprehensive session statistics & token metrics\n` +
+          `• <code>/workspace</code> - View and switch active workspace / project\n` +
           `• <code>/sessions</code> - Browse & switch between recent sessions\n` +
           `• <code>/attach</code> - Attach to active Web GUI session\n` +
+          `• <code>/new</code> - Start a brand new session / topic\n` +
+          `• <code>/stats</code> - Comprehensive session statistics & token metrics\n` +
           `• <code>/model</code> - Select model & reasoning effort\n` +
           `• <code>/compact</code> - Compact and summarize session history\n` +
           `• <code>/rename &lt;title&gt;</code> - Rename current session & topic\n` +
@@ -243,12 +352,15 @@ export class TelegramBridge {
     this.bot.command("new", async (ctx) => {
       try {
         const isForum = this.isThreadedChat(ctx);
+        const rawArg = ctx.message?.text?.replace(/^\/new(@\w+)?/, "").trim();
+        const activeCwd = this.getActiveCwd();
+
         if (isForum) {
-          const title = `Session ${new Date().toISOString().slice(11, 19)}`;
+          const title = rawArg ? formatTopicTitle(rawArg) : `Session ${new Date().toISOString().slice(11, 19)}`;
           const waitMsg = await ctx.reply("✨ Creating new DSH session and forum topic...", {
             message_thread_id: ctx.message?.message_thread_id
           });
-          const created = await this.dsh.createSession();
+          const created = await this.dsh.createSession(activeCwd);
           await this.dsh.renameSession(created.sessionId, title).catch(() => {});
 
           try {
@@ -258,13 +370,13 @@ export class TelegramBridge {
             await ctx.api.editMessageText(
               ctx.chat.id,
               waitMsg.message_id,
-              `✨ <b>New DSH Session Started</b>\nTopic: <b>${escapeHtml(title)}</b>\n🆔 <code>${created.sessionId}</code>`,
+              `✨ <b>New DSH Session Started</b>\nTopic: <b>${escapeHtml(title)}</b>\n📁 Workspace: <code>${escapeHtml(activeCwd)}</code>\n🆔 <code>${created.sessionId}</code>`,
               { parse_mode: "HTML" }
             );
 
             await ctx.api.sendMessage(
               ctx.chat.id,
-              `✨ <b>Session Initialized</b>\n🆔 <code>${created.sessionId}</code>\n\nAll messages in this topic route to this session.`,
+              `✨ <b>Session Initialized</b>\n📁 Workspace: <code>${escapeHtml(activeCwd)}</code>\n🆔 <code>${created.sessionId}</code>\n\nAll messages in this topic route to this session.`,
               {
                 parse_mode: "HTML",
                 message_thread_id: forumTopic.message_thread_id
@@ -276,19 +388,23 @@ export class TelegramBridge {
             await ctx.api.editMessageText(
               ctx.chat.id,
               waitMsg.message_id,
-              `✨ <b>New DSH Session Started</b>\n🆔 <code>${created.sessionId}</code>`,
+              `✨ <b>New DSH Session Started</b>\n📁 Workspace: <code>${escapeHtml(activeCwd)}</code>\n🆔 <code>${created.sessionId}</code>`,
               { parse_mode: "HTML" }
             );
           }
         } else {
-          const waitMsg = await ctx.reply("✨ Creating new DSH session...");
-          const created = await this.dsh.createSession();
+          const title = rawArg ? formatTopicTitle(rawArg) : `Session ${new Date().toISOString().slice(11, 19)}`;
+          const waitMsg = await ctx.reply("✨ Creating new DSH session...", {
+            message_thread_id: ctx.message?.message_thread_id
+          });
+          const created = await this.dsh.createSession(activeCwd);
+          await this.dsh.renameSession(created.sessionId, title).catch(() => {});
           this.persistSession(created.sessionId);
 
           await ctx.api.editMessageText(
             ctx.chat.id,
             waitMsg.message_id,
-            `✨ <b>New DSH Session Started</b>\n🆔 <code>${created.sessionId}</code>\n\nAll subsequent messages will execute inside this session.`,
+            `✨ <b>New DSH Session Started</b>\n📌 <b>${escapeHtml(title)}</b>\n📁 Workspace: <code>${escapeHtml(activeCwd)}</code>\n🆔 <code>${created.sessionId}</code>\n\nAll subsequent messages will execute inside this session.`,
             { parse_mode: "HTML" }
           );
         }
@@ -319,7 +435,7 @@ export class TelegramBridge {
 
         const vals = projections?.values || current.projections?.values;
         const title = vals?.title || "Untitled Session";
-        const cwd = current.cwd || this.config.defaultCwd;
+        const cwd = current.cwd || this.getActiveCwd();
         const modelSel = vals?.modelSelection?.lastUsed || vals?.modelSelection?.next;
         const stats = vals?.sessionStats;
         const context = vals?.contextPressure;
@@ -384,31 +500,129 @@ export class TelegramBridge {
       }
     });
 
+    // /workspace and /cwd
+    this.bot.command(["workspace", "cwd"], async (ctx) => {
+      try {
+        const messageThreadId = ctx.message?.message_thread_id;
+        const rawArg = ctx.message?.text?.replace(/^\/(workspace|cwd)(@\w+)?/, "").trim();
+
+        if (rawArg) {
+          const homeDir = process.env.HOME || "/home/amadeus";
+          let targetPath = rawArg;
+          if (targetPath.startsWith("~/")) {
+            targetPath = path.join(homeDir, targetPath.slice(2));
+          } else if (!path.isAbsolute(targetPath)) {
+            const inProjects = path.join(homeDir, "Projects", targetPath);
+            if (fs.existsSync(inProjects)) {
+              targetPath = inProjects;
+            } else {
+              targetPath = path.resolve(this.getActiveCwd(), targetPath);
+            }
+          }
+
+          if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isDirectory()) {
+            await ctx.reply(`❌ Directory not found: <code>${escapeHtml(targetPath)}</code>`, {
+              parse_mode: "HTML",
+              message_thread_id: messageThreadId
+            });
+            return;
+          }
+
+          this.setActiveCwd(targetPath);
+          await ctx.reply(
+            `📁 <b>Active Workspace Updated</b>\n<code>${escapeHtml(targetPath)}</code>\n\nNew sessions will start in this workspace.`,
+            {
+              parse_mode: "HTML",
+              message_thread_id: messageThreadId
+            }
+          );
+          return;
+        }
+
+        const currentCwd = this.getActiveCwd();
+        const available = await this.listAvailableWorkspaces();
+        const keyboard = new InlineKeyboard();
+
+        available.forEach((dir, idx) => {
+          const isCurrent = dir === currentCwd;
+          const name = path.basename(dir) || dir;
+          const parent = path.basename(path.dirname(dir));
+          const label = parent && parent !== "Projects" && parent !== "amadeus" ? `${parent}/${name}` : name;
+          const buttonText = `${isCurrent ? "✅ " : "📁 "}${label}`;
+
+          keyboard.text(buttonText, `set_cwd:${dir}`);
+          if ((idx + 1) % 2 === 0) keyboard.row();
+        });
+
+        const text =
+          `📁 <b>Workspace Manager</b>\n\n` +
+          `• <b>Default Workspace:</b>\n<code>${escapeHtml(currentCwd)}</code>\n\n` +
+          `Select a workspace below, or set one with:\n<code>/workspace &lt;name or path&gt;</code>`;
+
+        await ctx.reply(text, {
+          parse_mode: "HTML",
+          reply_markup: keyboard,
+          message_thread_id: messageThreadId
+        });
+      } catch (err: any) {
+        await ctx.reply(`❌ Error in workspace manager: ${err.message}`, {
+          message_thread_id: ctx.message?.message_thread_id
+        });
+      }
+    });
+
+    this.bot.callbackQuery(/^set_cwd:(.+)$/, async (ctx) => {
+      const targetCwd = ctx.match[1];
+      if (fs.existsSync(targetCwd)) {
+        this.setActiveCwd(targetCwd);
+        await ctx.answerCallbackQuery({
+          text: `Workspace set to ${path.basename(targetCwd)}`
+        });
+        await ctx.editMessageText(
+          `📁 <b>Active Workspace Updated</b>\n<code>${escapeHtml(targetCwd)}</code>\n\nNew sessions will start in this workspace.`,
+          { parse_mode: "HTML" }
+        );
+      } else {
+        await ctx.answerCallbackQuery({ text: "Directory not found!" });
+      }
+    });
+
     // /attach (sync with latest in Web GUI)
     this.bot.command("attach", async (ctx) => {
       try {
+        const messageThreadId = ctx.message?.message_thread_id;
         const active = await this.dsh.getActiveSession();
         if (!active) {
-          await ctx.reply("No active sessions found in DSH.");
+          await ctx.reply("No active sessions found in DSH.", {
+            message_thread_id: messageThreadId
+          });
           return;
         }
         this.persistSession(active.sessionId);
         const title = active.projections?.values?.title || "Active Web Session";
+        if (messageThreadId) {
+          this.topicStore.setBinding(ctx.chat.id, messageThreadId, active.sessionId, title);
+        }
         await ctx.reply(
-          `🔗 <b>Attached to Web GUI Session</b>\n📌 ${escapeHtml(title)}\n🆔 <code>${active.sessionId}</code>`,
-          { parse_mode: "HTML" }
+          `🔗 <b>Attached to Web GUI Session</b>\n📌 ${escapeHtml(title)}\n🆔 <code>${active.sessionId}</code>\nSubsequent messages will route here.`,
+          { parse_mode: "HTML", message_thread_id: messageThreadId }
         );
       } catch (err: any) {
-        await ctx.reply(`❌ Failed to attach: ${err.message}`);
+        await ctx.reply(`❌ Failed to attach: ${err.message}`, {
+          message_thread_id: ctx.message?.message_thread_id
+        });
       }
     });
 
     // /sessions (list and switch)
     this.bot.command("sessions", async (ctx) => {
       try {
+        const messageThreadId = ctx.message?.message_thread_id;
         const items = await this.dsh.listSessions();
         if (items.length === 0) {
-          await ctx.reply("No sessions available.");
+          await ctx.reply("No sessions available.", {
+            message_thread_id: messageThreadId
+          });
           return;
         }
 
@@ -420,10 +634,12 @@ export class TelegramBridge {
           const isCurrent = s.sessionId === this.currentSessionId;
           const marker = isCurrent ? "👉 " : `${idx + 1}. `;
           const title = s.projections?.values?.title || `Session ${s.sessionId.slice(0, 8)}`;
-          listText += `${marker}<b>${escapeHtml(title)}</b>\n<code>${s.sessionId}</code>\n\n`;
+          const cwdName = s.cwd ? path.basename(s.cwd) : "";
+          const cwdTag = cwdName ? ` [${cwdName}]` : "";
+          listText += `${marker}<b>${escapeHtml(title)}</b>${escapeHtml(cwdTag)}\n<code>${s.sessionId}</code>\n\n`;
 
           keyboard.text(
-            `${isCurrent ? "✅ " : ""}${idx + 1}. ${title.slice(0, 18)}`,
+            `${isCurrent ? "✅ " : ""}${idx + 1}. ${title.slice(0, 14)}${cwdTag}`,
             `switch:${s.sessionId}`
           );
           if ((idx + 1) % 2 === 0) keyboard.row();
@@ -431,10 +647,13 @@ export class TelegramBridge {
 
         await ctx.reply(listText, {
           parse_mode: "HTML",
-          reply_markup: keyboard
+          reply_markup: keyboard,
+          message_thread_id: messageThreadId
         });
       } catch (err: any) {
-        await ctx.reply(`❌ Error listing sessions: ${err.message}`);
+        await ctx.reply(`❌ Error listing sessions: ${err.message}`, {
+          message_thread_id: ctx.message?.message_thread_id
+        });
       }
     });
 
@@ -442,6 +661,22 @@ export class TelegramBridge {
     this.bot.callbackQuery(/^switch:(.+)$/, async (ctx) => {
       const targetSessionId = ctx.match[1];
       this.persistSession(targetSessionId);
+      const messageThreadId = ctx.callbackQuery?.message?.message_thread_id;
+      if (messageThreadId && ctx.chat) {
+        try {
+          const sessions = await this.dsh.listSessions();
+          const target = sessions.find((s) => s.sessionId === targetSessionId);
+          const title = target?.projections?.values?.title || `Session ${targetSessionId.slice(0, 8)}`;
+          this.topicStore.setBinding(ctx.chat.id, messageThreadId, targetSessionId, title);
+        } catch {
+          this.topicStore.setBinding(
+            ctx.chat.id,
+            messageThreadId,
+            targetSessionId,
+            `Session ${targetSessionId.slice(0, 8)}`
+          );
+        }
+      }
       await ctx.answerCallbackQuery({
         text: `Switched to session ${targetSessionId.slice(0, 8)}`
       });
@@ -791,32 +1026,10 @@ export class TelegramBridge {
     this.bot.on(["message:text", "message:photo", "message:document"], async (ctx) => {
       if (ctx.message.text?.startsWith("/") || ctx.message.caption?.startsWith("/")) return;
 
-      const isForum = this.isThreadedChat(ctx);
-      let messageThreadId = ctx.message.message_thread_id;
+      const messageThreadId = ctx.message.message_thread_id;
       let sessionId: string;
 
-      if (isForum && !messageThreadId) {
-        // User sent message outside any topic in a forum chat!
-        // Automatically create a new DSH session + new Telegram forum topic
-        const userText = ctx.message.text?.trim() || ctx.message.caption?.trim() || "New Session";
-        const topicTitle = formatTopicTitle(userText);
-        const created = await this.dsh.createSession();
-        await this.dsh.renameSession(created.sessionId, topicTitle).catch(() => {});
-
-        try {
-          const forumTopic = await ctx.api.createForumTopic(ctx.chat.id, topicTitle);
-          messageThreadId = forumTopic.message_thread_id;
-          this.topicStore.setBinding(ctx.chat.id, messageThreadId, created.sessionId, topicTitle);
-
-          await ctx.reply(
-            `✨ <b>New Session Started</b>\nTopic: <b>${escapeHtml(topicTitle)}</b>\n🆔 <code>${created.sessionId}</code>`,
-            { parse_mode: "HTML" }
-          );
-        } catch (forumErr: any) {
-          console.warn("[Bridge] createForumTopic failed, falling back to root:", forumErr.message);
-        }
-        sessionId = created.sessionId;
-      } else if (messageThreadId) {
+      if (messageThreadId) {
         const resolved = await this.resolveSessionForContext(ctx);
         sessionId = resolved.sessionId;
       } else {
@@ -1328,7 +1541,7 @@ export class TelegramBridge {
         } else {
           let resolved = img.source;
           if (!path.isAbsolute(resolved)) {
-            resolved = path.resolve(this.config.defaultCwd, resolved);
+            resolved = path.resolve(this.getActiveCwd(), resolved);
           }
           if (fs.existsSync(resolved)) {
             photoInput = new InputFile(resolved);
@@ -1416,10 +1629,11 @@ export class TelegramBridge {
     try {
       await this.bot.api.setMyCommands([
         { command: "start", description: "Overview and status" },
-        { command: "new", description: "Create a new session / topic" },
-        { command: "stats", description: "Session metrics, latency & token cache" },
+        { command: "workspace", description: "View and switch active workspace / cwd" },
         { command: "sessions", description: "List and switch sessions" },
         { command: "attach", description: "Attach to active Web GUI session" },
+        { command: "new", description: "Create a new session / topic" },
+        { command: "stats", description: "Session metrics, latency & token cache" },
         { command: "model", description: "Select model and reasoning effort" },
         { command: "compact", description: "Compact and summarize session history" },
         { command: "rename", description: "Rename active session and topic" },

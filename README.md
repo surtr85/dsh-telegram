@@ -54,10 +54,11 @@ It allows you to supervise, guide, inspect, and prompt your local DeepSeek Harne
 | Command | Description |
 | :--- | :--- |
 | `/start` | Overview, connection status, and quick capabilities guide. |
-| `/new` | Spawn a fresh, isolated DSH agent session (and Forum Topic in forums). |
-| `/stats` | Comprehensive telemetry dashboard: Context Window %, Token Breakdown, TTFT, Speed & Cache Hit Ratio. *(Aliases: `/session`, `/status`)* |
-| `/sessions` | Interactive menu listing recent sessions with 1-tap switching. |
+| `/workspace` | View and switch active workspace / project working directory. *(Alias: `/cwd`)* |
+| `/sessions` | Interactive menu listing recent sessions with 1-tap switching and workspace badges. |
 | `/attach` | Hot-attach to the newest active session opened in the DSH Web GUI. |
+| `/new` | Spawn a fresh, isolated DSH agent session (and Forum Topic in forums) in active workspace. |
+| `/stats` | Comprehensive telemetry dashboard: Context Window %, Token Breakdown, TTFT, Speed & Cache Hit Ratio. *(Aliases: `/session`, `/status`)* |
 | `/model` | AI Model switcher with dedicated reasoning effort selection buttons. |
 | `/compact` | Trigger history compaction to compress context tokens into a summary. |
 | `/rename <title>` | Rename the title of the active session and Telegram topic. |

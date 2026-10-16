@@ -87,6 +87,10 @@ export function loadConfig(): AppConfig {
     dshWsUrl: `ws://${dshAuthority}`,
     dshAuthority,
     credentialsPath,
-    defaultCwd: process.env.DSH_DEFAULT_CWD || "/home/amadeus/Projects"
+    defaultCwd:
+      process.env.DSH_DEFAULT_CWD ||
+      (fs.existsSync(path.join(homeDir, "Projects/nix-config"))
+        ? path.join(homeDir, "Projects/nix-config")
+        : path.join(homeDir, "Projects"))
   };
 }

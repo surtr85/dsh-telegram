@@ -7,12 +7,18 @@ export declare class TelegramBridge {
     private currentSessionId;
     private sessionStateFile;
     private topicStore;
+    private workspaceStateFile;
+    private activeCwd;
     private mediaGroupBuffers;
     private sessionLocks;
     private processedMessageIds;
     private activeTurns;
     private modelCatalogCache;
     constructor(config: AppConfig, dshClient: DshClient);
+    private loadPersistedWorkspace;
+    setActiveCwd(newCwd: string): void;
+    getActiveCwd(): string;
+    private listAvailableWorkspaces;
     private loadPersistedSession;
     private persistSession;
     private setupPlugins;
